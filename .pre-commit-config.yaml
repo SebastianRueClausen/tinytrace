@@ -1,0 +1,10 @@
+repos:
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        always_run: true
+      - id: clippy
+        always_run: true
+      - id: cargo-check
+        always_run: true

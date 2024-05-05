@@ -3,7 +3,7 @@ use ash::vk;
 use super::*;
 
 #[test]
-fn transfer_buffer() {
+fn transfer() {
     let mut context = Context::new().unwrap();
     let buffer = context
         .create_buffer(
@@ -16,20 +16,7 @@ fn transfer_buffer() {
             },
         )
         .unwrap();
-    let data: Box<[u8]> = (0..=255).collect();
-    context
-        .write_buffers(&[BufferWrite {
-            buffer: buffer.clone(),
-            data: &data,
-        }])
-        .unwrap();
-    let download = context.download(&[buffer.clone()], &[]).unwrap();
-    assert_eq!(download.buffers[&buffer], data);
-}
 
-#[test]
-fn transfer_image() {
-    let mut context = Context::new().unwrap();
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
         .create_image(
@@ -43,17 +30,32 @@ fn transfer_image() {
             },
         )
         .unwrap();
-    let data: Box<[u8]> = (0..extent.width * extent.height * 4)
+
+    let buffer_data: Box<[u8]> = (0..=255).collect();
+    let image_data: Box<[u8]> = (0..extent.width * extent.height * 4)
         .map(|value| (value % 255) as u8)
         .collect();
+
+    context
+        .write_buffers(&[BufferWrite {
+            buffer: buffer.clone(),
+            data: &buffer_data,
+        }])
+        .unwrap();
+
     context
         .write_images(&[ImageWrite {
             image: image.clone(),
             offset: vk::Offset3D::default(),
             extent,
-            mips: &[data.clone()],
+            mips: &[image_data.clone()],
         }])
         .unwrap();
-    let download = context.download(&[], &[image.clone()]).unwrap();
-    assert_eq!(download.images[&image], data);
+
+    let download = context
+        .download(&[buffer.clone()], &[image.clone()])
+        .unwrap();
+
+    assert_eq!(download.buffers[&buffer], buffer_data);
+    assert_eq!(download.images[&image], image_data);
 }

@@ -224,6 +224,7 @@ impl Context {
                     .size
                     .next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
         });
+        println!("{scratch_offset}");
         buffers
             .iter()
             .fold(scratch_offset, |scratch_offset, buffer| unsafe {
@@ -240,7 +241,7 @@ impl Context {
                         &[buffer_copy],
                     );
                 }
-                scratch_offset + byte_count
+                scratch_offset + byte_count.next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
             });
         self.pool_mut(Lifetime::Frame).buffers.push(scratch);
         self.execute_commands()?;
@@ -250,18 +251,18 @@ impl Context {
             mapping = mapping.add(size.next_multiple_of(CHUNK_ALIGNMENT));
             memory.into_boxed_slice()
         };
-        let buffers: HashMap<_, _> = buffers
-            .iter()
-            .map(|buffer| {
-                let data = copy_from_mapping(self.buffer(buffer).size as usize);
-                (buffer.clone(), data)
-            })
-            .collect();
         let images: HashMap<_, _> = images
             .iter()
             .map(|image| {
                 let data = copy_from_mapping(self.image(image).size as usize);
                 (image.clone(), data)
+            })
+            .collect();
+        let buffers: HashMap<_, _> = buffers
+            .iter()
+            .map(|buffer| {
+                let data = copy_from_mapping(self.buffer(buffer).size as usize);
+                (buffer.clone(), data)
             })
             .collect();
         self.clear_pool(Lifetime::Frame);

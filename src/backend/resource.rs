@@ -103,7 +103,6 @@ pub struct Image {
     pub aspect: vk::ImageAspectFlags,
     pub mip_level_count: u32,
     pub swapchain: bool,
-    pub size: vk::DeviceSize,
     pub layout: vk::ImageLayout,
     pub access: Access,
 }
@@ -146,11 +145,27 @@ impl Image {
             extent: request.extent,
             format: request.format,
             mip_level_count: request.mip_level_count,
-            size: memory_requirements.size,
             layout: vk::ImageLayout::UNDEFINED,
             swapchain: false,
             image,
         })
+    }
+
+    pub fn mip_byte_size(&self, level: u32) -> vk::DeviceSize {
+        let extent = mip_level_extent(self.extent, level);
+        let FormatInfo {
+            block_extent,
+            bytes_per_block,
+        } = format_info(self.format);
+        let block_count =
+            (extent.width / block_extent.width) * (extent.height / block_extent.height);
+        block_count as vk::DeviceSize * bytes_per_block
+    }
+
+    pub fn size(&self) -> vk::DeviceSize {
+        (0..self.mip_level_count)
+            .map(|level| self.mip_byte_size(level))
+            .sum()
     }
 
     pub fn destroy(&self, device: &Device) {
@@ -175,6 +190,26 @@ pub fn mip_level_offset(offset: vk::Offset3D, level: u32) -> vk::Offset3D {
         x: offset.x >> level,
         y: offset.y >> level,
         z: offset.z,
+    }
+}
+
+pub struct FormatInfo {
+    pub block_extent: vk::Extent2D,
+    pub bytes_per_block: vk::DeviceSize,
+}
+
+pub fn format_info(format: vk::Format) -> FormatInfo {
+    match format {
+        vk::Format::R8G8B8A8_SRGB => FormatInfo {
+            block_extent: vk::Extent2D {
+                width: 1,
+                height: 1,
+            },
+            bytes_per_block: 4,
+        },
+        _ => {
+            panic!("unsupported format");
+        }
     }
 }
 

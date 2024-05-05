@@ -155,6 +155,9 @@ impl Context {
         Ok(())
     }
 
+    /// Download data from buffers and images.
+    ///
+    /// The memory of images with multiple mips is densely packed.
     pub fn download(
         &mut self,
         buffers: &[Handle<Buffer>],
@@ -177,6 +180,8 @@ impl Context {
             })
             .collect();
         self.access_resources(&image_accesses, &buffer_accesses);
+
+        // Figure out scratch size.
         let buffer_scratch_size: vk::DeviceSize = buffers
             .iter()
             .map(|buffer| {
@@ -189,13 +194,16 @@ impl Context {
             .iter()
             .map(|image| {
                 self.image(image)
-                    .size
+                    .size()
                     .next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
             })
             .sum();
         let (scratch, mut mapping) = self.get_scratch(buffer_scratch_size + image_scratch_size)?;
+
+        // Copy images into scratch.
         let scratch_offset = images.iter().fold(0, |scratch_offset, image| unsafe {
             let image = self.image(image);
+            let mut image_offset = 0;
             let copies: Vec<_> = (0..image.mip_level_count)
                 .map(|level| {
                     let subresource = vk::ImageSubresourceLayers::default()
@@ -203,12 +211,15 @@ impl Context {
                         .base_array_layer(0)
                         .layer_count(1)
                         .mip_level(level);
-                    vk::BufferImageCopy::default()
-                        .buffer_offset(scratch_offset)
-                        .image_extent(image.extent)
-                        .buffer_image_height(image.extent.height)
-                        .buffer_row_length(image.extent.width)
-                        .image_subresource(subresource)
+                    let extent = resource::mip_level_extent(image.extent, level);
+                    let copy = vk::BufferImageCopy::default()
+                        .buffer_offset(scratch_offset + image_offset)
+                        .image_extent(extent)
+                        .buffer_image_height(extent.height)
+                        .buffer_row_length(extent.width)
+                        .image_subresource(subresource);
+                    image_offset += image.mip_byte_size(level);
+                    copy
                 })
                 .collect();
             let layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
@@ -221,10 +232,11 @@ impl Context {
             );
             scratch_offset
                 + image
-                    .size
+                    .size()
                     .next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
         });
-        println!("{scratch_offset}");
+
+        // Copy buffers into scratch.
         buffers
             .iter()
             .fold(scratch_offset, |scratch_offset, buffer| unsafe {
@@ -243,8 +255,11 @@ impl Context {
                 }
                 scratch_offset + byte_count.next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
             });
+
         self.pool_mut(Lifetime::Frame).buffers.push(scratch);
         self.execute_commands()?;
+
+        // Copy data from scratch memory.
         let mut copy_from_mapping = |size| unsafe {
             let mut memory = vec![0x0u8; size];
             memory.as_mut_ptr().copy_from_nonoverlapping(mapping, size);
@@ -254,7 +269,7 @@ impl Context {
         let images: HashMap<_, _> = images
             .iter()
             .map(|image| {
-                let data = copy_from_mapping(self.image(image).size as usize);
+                let data = copy_from_mapping(self.image(image).size() as usize);
                 (image.clone(), data)
             })
             .collect();
@@ -265,6 +280,7 @@ impl Context {
                 (buffer.clone(), data)
             })
             .collect();
+
         self.clear_pool(Lifetime::Frame);
         Ok(Download { buffers, images })
     }

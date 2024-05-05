@@ -94,24 +94,29 @@ impl Context {
     }
 
     pub fn access_resources(&mut self, images: &[ImageAccess], buffers: &[BufferAccess]) {
-        let update_access = |access: Access, resource_access: &mut Access| {
-            let has_dependency = resource_access.writes() || access.writes();
-            if !has_dependency {
-                resource_access.access |= access.access;
-            }
-            has_dependency
-        };
         let images: Vec<_> = images
             .iter()
             .filter(|access| {
-                update_access(access.access, &mut self.image_mut(&access.image).access)
+                let image = self.image_mut(&access.image);
+                let has_dependency = access.access.writes() || image.access.writes();
+                if !has_dependency || access.layout == image.layout {
+                    image.access |= access.access;
+                    false
+                } else {
+                    true
+                }
             })
             .cloned()
             .collect();
         let buffers: Vec<_> = buffers
             .iter()
             .filter(|access| {
-                update_access(access.access, &mut self.buffer_mut(&access.buffer).access)
+                let buffer = self.buffer_mut(&access.buffer);
+                let has_dependency = buffer.access.writes() || access.access.writes();
+                if !has_dependency {
+                    buffer.access |= access.access;
+                }
+                has_dependency
             })
             .cloned()
             .collect();

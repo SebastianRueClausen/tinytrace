@@ -39,11 +39,35 @@ const READ_ACCESS: Access = Access {
     access: vk::AccessFlags2::TRANSFER_READ,
 };
 
+fn buffer_image_copy(
+    aspect: vk::ImageAspectFlags,
+    level: u32,
+    buffer_offset: vk::DeviceSize,
+    offset: vk::Offset3D,
+    extent: vk::Extent3D,
+) -> vk::BufferImageCopy {
+    let subresource = vk::ImageSubresourceLayers::default()
+        .aspect_mask(aspect)
+        .base_array_layer(0)
+        .layer_count(1)
+        .mip_level(level);
+    vk::BufferImageCopy::default()
+        .buffer_offset(buffer_offset)
+        .image_extent(extent)
+        .image_offset(offset)
+        .buffer_image_height(extent.height)
+        .buffer_row_length(extent.width)
+        .image_subresource(subresource)
+}
+
 impl Context {
     fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Buffer, *mut u8), Error> {
         let pool = self.pools.entry(Lifetime::Frame).or_default();
-        let request = BufferRequest::scratch(size);
-        let scratch = Buffer::new(&self.device, &mut pool.allocator, &request)?;
+        let scratch = Buffer::new(
+            &self.device,
+            &mut pool.allocator,
+            &BufferRequest::scratch(size),
+        )?;
         let mapping = pool.allocator.map(&self.device, scratch.memory_index)?;
         Ok((scratch, mapping))
     }
@@ -61,13 +85,19 @@ impl Context {
             })
             .collect();
         self.access_resources(&[], &buffer_accesses);
-        let scratch_size = writes.iter().map(|write| write.data.len() as u64).sum();
-        let (scratch, mapping) = self.get_scratch(scratch_size)?;
+
+        // Create and write to scratch.
+        let scratch_size: usize = writes
+            .iter()
+            .map(|write| write.data.len().next_multiple_of(CHUNK_ALIGNMENT))
+            .sum();
+        let (scratch, mapping) = self.get_scratch(scratch_size as vk::DeviceSize)?;
         writes.iter().fold(mapping, |ptr, write| unsafe {
             ptr.copy_from_nonoverlapping(write.data.as_ptr(), write.data.len());
-            ptr.add(write.data.len())
+            ptr.add(write.data.len().next_multiple_of(CHUNK_ALIGNMENT))
         });
-        // Maybe unmap the memory.
+
+        // Upload scratch to buffers.
         writes.iter().fold(0, |offset, write| unsafe {
             let byte_count = write.data.len() as u64;
             if byte_count != 0 {
@@ -99,6 +129,8 @@ impl Context {
             })
             .collect();
         self.access_resources(&image_accesses, &[]);
+
+        // Create and write to scratch.
         let scratch_size = writes
             .iter()
             .flat_map(|write| {
@@ -116,7 +148,8 @@ impl Context {
                 ptr.copy_from_nonoverlapping(mip.as_ptr(), mip.len());
                 ptr.add(mip.len().next_multiple_of(CHUNK_ALIGNMENT))
             });
-        // Maybe unmap memory.
+
+        // Upload scratch to images.
         writes
             .iter()
             .flat_map(|write| {
@@ -129,23 +162,15 @@ impl Context {
             .fold(
                 0,
                 |buffer_offset, (image, extent, offset, data, level)| unsafe {
-                    let subresource = vk::ImageSubresourceLayers::default()
-                        .aspect_mask(self.image(&image).aspect)
-                        .base_array_layer(0)
-                        .layer_count(1)
-                        .mip_level(level);
-                    let image_copy = vk::BufferImageCopy::default()
-                        .buffer_offset(buffer_offset)
-                        .image_extent(extent)
-                        .image_offset(offset)
-                        .buffer_image_height(extent.height)
-                        .buffer_row_length(extent.width)
-                        .image_subresource(subresource);
+                    let image = self.image(&image);
+                    let image_copy =
+                        buffer_image_copy(image.aspect, level, buffer_offset, offset, extent);
+                    let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     self.device.cmd_copy_buffer_to_image(
                         *self.command_buffer,
                         *scratch,
-                        **self.image(&image),
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        **image,
+                        layout,
                         &[image_copy],
                     );
                     buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as u64
@@ -206,20 +231,15 @@ impl Context {
             let mut image_offset = 0;
             let copies: Vec<_> = (0..image.mip_level_count)
                 .map(|level| {
-                    let subresource = vk::ImageSubresourceLayers::default()
-                        .aspect_mask(image.aspect)
-                        .base_array_layer(0)
-                        .layer_count(1)
-                        .mip_level(level);
-                    let extent = resource::mip_level_extent(image.extent, level);
-                    let copy = vk::BufferImageCopy::default()
-                        .buffer_offset(scratch_offset + image_offset)
-                        .image_extent(extent)
-                        .buffer_image_height(extent.height)
-                        .buffer_row_length(extent.width)
-                        .image_subresource(subresource);
+                    let buffer_offset = scratch_offset + image_offset;
                     image_offset += image.mip_byte_size(level);
-                    copy
+                    buffer_image_copy(
+                        image.aspect,
+                        level,
+                        buffer_offset,
+                        vk::Offset3D::default(),
+                        resource::mip_level_extent(image.extent, level),
+                    )
                 })
                 .collect();
             let layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;

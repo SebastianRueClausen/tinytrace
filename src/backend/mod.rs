@@ -22,7 +22,7 @@ use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
 use instance::Instance;
-pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, ImageView};
+pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest};
 pub use shader::{Binding, BindingType, Shader};
 
 /// The lifetime of a resource.
@@ -87,7 +87,7 @@ impl<T> hash::Hash for Handle<T> {
 struct Pool {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
-    image_views: Vec<ImageView>,
+    image_views: Vec<vk::ImageView>,
     pipelines: Vec<Shader>,
     allocator: Allocator,
     epoch: usize,
@@ -97,7 +97,9 @@ impl Pool {
     fn clear(&mut self, device: &Device) {
         self.buffers.drain(..).for_each(|b| b.destroy(device));
         self.images.drain(..).for_each(|i| i.destroy(device));
-        self.image_views.drain(..).for_each(|v| v.destroy(device));
+        self.image_views
+            .drain(..)
+            .for_each(|v| unsafe { device.destroy_image_view(v, None) });
         self.pipelines.drain(..).for_each(|p| p.destroy(device));
         self.allocator.destroy(device);
         self.epoch += 1;
@@ -158,11 +160,6 @@ impl Context {
         &self.pools[&handle.lifetime].images[handle.index]
     }
 
-    pub fn image_view(&self, handle: &Handle<ImageView>) -> &ImageView {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].image_views[handle.index]
-    }
-
     fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {
         self.check_handle(handle);
         &mut self.pools.get_mut(&handle.lifetime).unwrap().buffers[handle.index]
@@ -191,17 +188,6 @@ impl Context {
         let pool = self.pools.entry(lifetime).or_default();
         Image::new(&self.device, &mut pool.allocator, request)
             .map(|image| Handle::new(lifetime, pool.epoch, &mut pool.images, image))
-    }
-
-    pub fn create_image_view(
-        &mut self,
-        image: &Handle<Image>,
-        range: ImageRange,
-    ) -> Result<Handle<ImageView>, Error> {
-        self.check_handle(image);
-        let pool = self.pools.entry(image.lifetime).or_default();
-        ImageView::new(&self.device, &pool.images[image.index], range)
-            .map(|view| Handle::new(image.lifetime, pool.epoch, &mut pool.image_views, view))
     }
 
     pub fn execute_commands(&mut self) -> Result<(), Error> {

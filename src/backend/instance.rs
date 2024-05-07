@@ -11,31 +11,31 @@ pub struct Instance {
     pub debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
+impl Deref for Instance {
+    type Target = ash::Instance;
+
+    fn deref(&self) -> &Self::Target {
+        &self.instance
+    }
+}
+
 impl Instance {
     pub fn new(validate: bool) -> Result<Self, Error> {
+        use vk::{
+            DebugUtilsMessageSeverityFlagsEXT as Severity, DebugUtilsMessageTypeFlagsEXT as Type,
+        };
         let entry = unsafe { ash::Entry::load()? };
-        let mut debug_info = {
-            use vk::{
-                DebugUtilsMessageSeverityFlagsEXT as Severity,
-                DebugUtilsMessageTypeFlagsEXT as Type,
-            };
-            vk::DebugUtilsMessengerCreateInfoEXT::default()
-                .message_severity(
-                    Severity::ERROR | Severity::WARNING | Severity::INFO | Severity::VERBOSE,
-                )
-                .message_type(
-                    Type::GENERAL
-                        | Type::PERFORMANCE
-                        | Type::VALIDATION
-                        | Type::DEVICE_ADDRESS_BINDING,
-                )
-                .pfn_user_callback(Some(debug_callback))
-        };
-        let layers = if validate {
-            vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()]
-        } else {
-            vec![]
-        };
+        let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+            .message_severity(
+                Severity::ERROR | Severity::WARNING | Severity::INFO | Severity::VERBOSE,
+            )
+            .message_type(
+                Type::GENERAL | Type::PERFORMANCE | Type::VALIDATION | Type::DEVICE_ADDRESS_BINDING,
+            )
+            .pfn_user_callback(Some(debug_callback));
+        let layers = validate
+            .then(|| vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()])
+            .unwrap_or_default();
         let layer_names: Vec<_> = layers.iter().map(|layer| layer.as_ptr()).collect();
         let extension_names = [
             ext::debug_utils::NAME.as_ptr(),
@@ -72,14 +72,6 @@ impl Instance {
                 .destroy_debug_utils_messenger(self.debug_messenger, None);
             self.instance.destroy_instance(None);
         }
-    }
-}
-
-impl Deref for Instance {
-    type Target = ash::Instance;
-
-    fn deref(&self) -> &Self::Target {
-        &self.instance
     }
 }
 

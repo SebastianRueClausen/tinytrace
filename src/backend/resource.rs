@@ -43,11 +43,6 @@ impl ops::Deref for Buffer {
     }
 }
 
-fn buffer_address(device: &Device, buffer: vk::Buffer) -> vk::DeviceAddress {
-    let address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-    unsafe { device.get_buffer_device_address(&address_info) }
-}
-
 impl Buffer {
     pub fn new(
         device: &Device,
@@ -75,7 +70,8 @@ impl Buffer {
     }
 
     pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
-        buffer_address(device, self.buffer)
+        let address_info = vk::BufferDeviceAddressInfo::default().buffer(**self);
+        unsafe { device.get_buffer_device_address(&address_info) }
     }
 
     pub fn destroy(&self, device: &Device) {
@@ -231,43 +227,27 @@ impl ImageRange {
     };
 }
 
-#[derive(Debug, Clone)]
-pub struct ImageView {
-    view: vk::ImageView,
-    #[allow(dead_code)]
+pub fn create_image_view(
+    device: &Device,
+    image: &Image,
     range: ImageRange,
-}
-
-impl ops::Deref for ImageView {
-    type Target = vk::ImageView;
-
-    fn deref(&self) -> &Self::Target {
-        &self.view
-    }
-}
-
-impl ImageView {
-    pub fn new(device: &Device, image: &Image, range: ImageRange) -> Result<Self, Error> {
-        let aspect_mask = format_aspect(image.format);
-        let image_view_info = vk::ImageViewCreateInfo::default()
-            .image(image.image)
-            .format(image.format)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .subresource_range(vk::ImageSubresourceRange {
-                base_mip_level: range.base_mip_level,
-                level_count: range.mip_level_count,
-                base_array_layer: 0,
-                layer_count: 1,
-                aspect_mask,
-            });
-        let view = unsafe { device.create_image_view(&image_view_info, None)? };
-        Ok(ImageView { view, range })
-    }
-
-    pub fn destroy(&self, device: &Device) {
-        unsafe {
-            device.destroy_image_view(self.view, None);
-        }
+) -> Result<vk::ImageView, Error> {
+    let aspect_mask = format_aspect(image.format);
+    let image_view_info = vk::ImageViewCreateInfo::default()
+        .image(image.image)
+        .format(image.format)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .subresource_range(vk::ImageSubresourceRange {
+            base_mip_level: range.base_mip_level,
+            level_count: range.mip_level_count,
+            base_array_layer: 0,
+            layer_count: 1,
+            aspect_mask,
+        });
+    unsafe {
+        device
+            .create_image_view(&image_view_info, None)
+            .map_err(Error::from)
     }
 }
 
@@ -286,14 +266,6 @@ pub struct MemoryBlock {
     size: vk::DeviceSize,
     offset: vk::DeviceSize,
     mapping: Option<*mut u8>,
-}
-
-impl ops::Deref for MemoryBlock {
-    type Target = vk::DeviceMemory;
-
-    fn deref(&self) -> &Self::Target {
-        &self.memory
-    }
 }
 
 impl MemoryBlock {
@@ -324,11 +296,10 @@ impl MemoryBlock {
         alignment: vk::DeviceSize,
     ) -> Option<vk::DeviceSize> {
         let start = self.offset.next_multiple_of(alignment);
-        let end = start + size;
-        if end > self.size {
+        if start + size > self.size {
             return None;
         }
-        self.offset = end;
+        self.offset = start + size;
         Some(start)
     }
 

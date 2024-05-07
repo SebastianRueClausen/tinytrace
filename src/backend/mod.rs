@@ -1,6 +1,5 @@
 pub mod command;
 pub mod copy;
-mod descriptor;
 mod device;
 mod instance;
 pub mod resource;
@@ -21,11 +20,10 @@ use super::error::Error;
 use ash::vk;
 use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
-pub use descriptor::{Binding, BindingType, DescriptorLayout};
 use device::Device;
 use instance::Instance;
 pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, ImageView};
-pub use shader::Shader;
+pub use shader::{Binding, BindingType, Shader};
 
 /// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,7 +88,6 @@ struct Pool {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
     image_views: Vec<ImageView>,
-    descriptor_layouts: Vec<DescriptorLayout>,
     pipelines: Vec<Shader>,
     allocator: Allocator,
     epoch: usize,
@@ -101,9 +98,6 @@ impl Pool {
         self.buffers.drain(..).for_each(|b| b.destroy(device));
         self.images.drain(..).for_each(|i| i.destroy(device));
         self.image_views.drain(..).for_each(|v| v.destroy(device));
-        self.descriptor_layouts
-            .drain(..)
-            .for_each(|l| l.destroy(device));
         self.pipelines.drain(..).for_each(|p| p.destroy(device));
         self.allocator.destroy(device);
         self.epoch += 1;
@@ -167,11 +161,6 @@ impl Context {
     pub fn image_view(&self, handle: &Handle<ImageView>) -> &ImageView {
         self.check_handle(handle);
         &self.pools[&handle.lifetime].image_views[handle.index]
-    }
-
-    pub fn descriptor_layout(&self, handle: &Handle<DescriptorLayout>) -> &DescriptorLayout {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].descriptor_layouts[handle.index]
     }
 
     fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {

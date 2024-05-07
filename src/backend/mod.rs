@@ -25,7 +25,7 @@ pub use descriptor::{Binding, BindingType, DescriptorLayout};
 use device::Device;
 use instance::Instance;
 pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, ImageView};
-pub use shader::{Pipeline, PipelineLayout, Shader};
+pub use shader::Shader;
 
 /// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,7 +91,7 @@ struct Pool {
     images: Vec<Image>,
     image_views: Vec<ImageView>,
     descriptor_layouts: Vec<DescriptorLayout>,
-    pipelines: Vec<Pipeline>,
+    pipelines: Vec<Shader>,
     allocator: Allocator,
     epoch: usize,
 }

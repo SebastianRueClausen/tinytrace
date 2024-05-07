@@ -93,19 +93,15 @@ fn transfer_image_mips() {
 #[test]
 fn create_compute_pipeline() {
     let mut context = Context::new().unwrap();
-    let shader = Shader {
-        stage: vk::ShaderStageFlags::COMPUTE,
-        source: "void main() { }",
-    };
+    let source = "void main() { }";
     let descriptor = context
         .create_descriptor_layout(&[Binding {
             name: "stuff",
             ty: BindingType::UniformBuffer { ty: "int" },
         }])
         .unwrap();
-    let layout = PipelineLayout {
-        descriptor_layouts: &[descriptor],
-        push_constant: None,
-    };
-    let _pipeline = context.create_compute_pipeline(&shader, &layout).unwrap();
+    let grid_size = vk::Extent2D::default().width(32).height(32);
+    let _pipeline = context
+        .create_shader(source, grid_size, &[descriptor])
+        .unwrap();
 }

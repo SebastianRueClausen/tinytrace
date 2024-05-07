@@ -23,7 +23,7 @@ fn transfer() {
             &ImageRequest {
                 extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                usage: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                usage_flags: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
                 memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 mip_level_count: 1,
             },
@@ -64,7 +64,7 @@ fn transfer_image_mips() {
             &ImageRequest {
                 extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                usage: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                usage_flags: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
                 memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 mip_level_count: 2,
             },
@@ -88,4 +88,24 @@ fn transfer_image_mips() {
     // Check that the mips are packed tightly.
     assert_eq!(download.images[&image][..mips[0].len()], *mips[0]);
     assert_eq!(download.images[&image][mips[0].len()..], *mips[1]);
+}
+
+#[test]
+fn create_compute_pipeline() {
+    let mut context = Context::new().unwrap();
+    let shader = Shader {
+        stage: vk::ShaderStageFlags::COMPUTE,
+        source: "void main() { }",
+    };
+    let descriptor = context
+        .create_descriptor_layout(&[Binding {
+            name: "stuff",
+            ty: BindingType::UniformBuffer { ty: "int" },
+        }])
+        .unwrap();
+    let layout = PipelineLayout {
+        descriptor_layouts: &[descriptor],
+        push_constant: None,
+    };
+    let _pipeline = context.create_compute_pipeline(&shader, &layout).unwrap();
 }

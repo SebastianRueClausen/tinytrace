@@ -1,22 +1,31 @@
 pub mod command;
 pub mod copy;
+mod descriptor;
 mod device;
 mod instance;
 pub mod resource;
+mod shader;
 mod sync;
 
 #[cfg(test)]
 mod test;
 
-use std::{collections::HashMap, hash::Hash, marker::PhantomData, slice};
+use std::{
+    collections::HashMap,
+    hash::{self, Hash},
+    marker::PhantomData,
+    slice,
+};
 
 use super::error::Error;
 use ash::vk;
 use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
+pub use descriptor::{Binding, BindingType, DescriptorLayout};
 use device::Device;
 use instance::Instance;
 pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, ImageView};
+pub use shader::{Pipeline, PipelineLayout, Shader};
 
 /// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,11 +46,12 @@ pub struct Handle<T> {
 }
 
 impl<T> Handle<T> {
-    fn new(lifetime: Lifetime, index: usize, epoch: usize) -> Self {
+    fn new(lifetime: Lifetime, epoch: usize, vec: &mut Vec<T>, value: T) -> Self {
+        vec.push(value);
         Self {
-            lifetime,
-            index,
+            index: vec.len() - 1,
             epoch,
+            lifetime,
             _marker: PhantomData,
         }
     }
@@ -66,8 +76,8 @@ impl<T> Clone for Handle<T> {
     }
 }
 
-impl<T> std::hash::Hash for Handle<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl<T> hash::Hash for Handle<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.lifetime.hash(state);
         self.index.hash(state);
         self.epoch.hash(state);
@@ -80,21 +90,21 @@ struct Pool {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
     image_views: Vec<ImageView>,
+    descriptor_layouts: Vec<DescriptorLayout>,
+    pipelines: Vec<Pipeline>,
     allocator: Allocator,
     epoch: usize,
 }
 
 impl Pool {
     fn clear(&mut self, device: &Device) {
-        for buffer in self.buffers.drain(..) {
-            buffer.destroy(device);
-        }
-        for image in self.images.drain(..) {
-            image.destroy(device);
-        }
-        for image_view in self.image_views.drain(..) {
-            image_view.destroy(device);
-        }
+        self.buffers.drain(..).for_each(|b| b.destroy(device));
+        self.images.drain(..).for_each(|i| i.destroy(device));
+        self.image_views.drain(..).for_each(|v| v.destroy(device));
+        self.descriptor_layouts
+            .drain(..)
+            .for_each(|l| l.destroy(device));
+        self.pipelines.drain(..).for_each(|p| p.destroy(device));
         self.allocator.destroy(device);
         self.epoch += 1;
     }
@@ -125,19 +135,13 @@ impl Context {
         Ok(Self {
             pools: HashMap::default(),
             command_buffer: CommandBuffer::new(&device)?,
-            instance,
             device,
+            instance,
         })
     }
 
     fn check_handle<T>(&self, handle: &Handle<T>) {
-        debug_assert_eq!(
-            self.pools
-                .get(&handle.lifetime)
-                .expect("invalid lifetime")
-                .epoch,
-            handle.epoch
-        )
+        debug_assert_eq!(self.pools[&handle.lifetime].epoch, handle.epoch)
     }
 
     fn pool_mut(&mut self, lifetime: Lifetime) -> &mut Pool {
@@ -165,6 +169,11 @@ impl Context {
         &self.pools[&handle.lifetime].image_views[handle.index]
     }
 
+    pub fn descriptor_layout(&self, handle: &Handle<DescriptorLayout>) -> &DescriptorLayout {
+        self.check_handle(handle);
+        &self.pools[&handle.lifetime].descriptor_layouts[handle.index]
+    }
+
     fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {
         self.check_handle(handle);
         &mut self.pools.get_mut(&handle.lifetime).unwrap().buffers[handle.index]
@@ -181,9 +190,8 @@ impl Context {
         request: &BufferRequest,
     ) -> Result<Handle<Buffer>, Error> {
         let pool = self.pools.entry(lifetime).or_default();
-        pool.buffers
-            .push(Buffer::new(&self.device, &mut pool.allocator, request)?);
-        Ok(Handle::new(lifetime, pool.buffers.len() - 1, pool.epoch))
+        Buffer::new(&self.device, &mut pool.allocator, request)
+            .map(|buffer| Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
     }
 
     pub fn create_image(
@@ -192,29 +200,19 @@ impl Context {
         request: &ImageRequest,
     ) -> Result<Handle<Image>, Error> {
         let pool = self.pools.entry(lifetime).or_default();
-        pool.images
-            .push(Image::new(&self.device, &mut pool.allocator, request)?);
-        Ok(Handle::new(lifetime, pool.images.len() - 1, pool.epoch))
+        Image::new(&self.device, &mut pool.allocator, request)
+            .map(|image| Handle::new(lifetime, pool.epoch, &mut pool.images, image))
     }
 
     pub fn create_image_view(
         &mut self,
-        lifetime: Lifetime,
         image: &Handle<Image>,
         range: ImageRange,
-    ) -> Result<Handle<Image>, Error> {
+    ) -> Result<Handle<ImageView>, Error> {
         self.check_handle(image);
-        let pool = self.pools.entry(lifetime).or_default();
-        pool.image_views.push(ImageView::new(
-            &self.device,
-            &pool.images[image.index],
-            range,
-        )?);
-        Ok(Handle::new(
-            lifetime,
-            pool.image_views.len() - 1,
-            pool.epoch,
-        ))
+        let pool = self.pools.entry(image.lifetime).or_default();
+        ImageView::new(&self.device, &pool.images[image.index], range)
+            .map(|view| Handle::new(image.lifetime, pool.epoch, &mut pool.image_views, view))
     }
 
     pub fn execute_commands(&mut self) -> Result<(), Error> {

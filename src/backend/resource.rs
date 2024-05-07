@@ -32,6 +32,7 @@ pub struct Buffer {
     pub memory_index: MemoryIndex,
     pub size: vk::DeviceSize,
     pub access: Access,
+    pub usage_flags: vk::BufferUsageFlags,
 }
 
 impl ops::Deref for Buffer {
@@ -40,6 +41,11 @@ impl ops::Deref for Buffer {
     fn deref(&self) -> &Self::Target {
         &self.buffer
     }
+}
+
+fn buffer_address(device: &Device, buffer: vk::Buffer) -> vk::DeviceAddress {
+    let address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    unsafe { device.get_buffer_device_address(&address_info) }
 }
 
 impl Buffer {
@@ -61,6 +67,7 @@ impl Buffer {
         }
         Ok(Self {
             access: Access::default(),
+            usage_flags: request.usage_flags,
             size,
             buffer,
             memory_index,
@@ -68,8 +75,7 @@ impl Buffer {
     }
 
     pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
-        let address_info = vk::BufferDeviceAddressInfo::default().buffer(self.buffer);
-        unsafe { device.get_buffer_device_address(&address_info) }
+        buffer_address(device, self.buffer)
     }
 
     pub fn destroy(&self, device: &Device) {
@@ -91,7 +97,7 @@ pub struct ImageRequest {
     pub extent: vk::Extent3D,
     pub format: vk::Format,
     pub mip_level_count: u32,
-    pub usage: vk::ImageUsageFlags,
+    pub usage_flags: vk::ImageUsageFlags,
     pub memory_flags: vk::MemoryPropertyFlags,
 }
 
@@ -105,6 +111,7 @@ pub struct Image {
     pub swapchain: bool,
     pub layout: vk::ImageLayout,
     pub access: Access,
+    pub usage_flags: vk::ImageUsageFlags,
 }
 
 impl ops::Deref for Image {
@@ -129,7 +136,7 @@ impl Image {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(request.usage)
+            .usage(request.usage_flags)
             .image_type(vk::ImageType::TYPE_2D)
             .initial_layout(layout);
         let image = unsafe { device.create_image(&image_info, None)? };
@@ -146,6 +153,7 @@ impl Image {
             format: request.format,
             mip_level_count: request.mip_level_count,
             layout: vk::ImageLayout::UNDEFINED,
+            usage_flags: request.usage_flags,
             swapchain: false,
             image,
         })
@@ -201,10 +209,7 @@ pub struct FormatInfo {
 pub fn format_info(format: vk::Format) -> FormatInfo {
     match format {
         vk::Format::R8G8B8A8_SRGB => FormatInfo {
-            block_extent: vk::Extent2D {
-                width: 1,
-                height: 1,
-            },
+            block_extent: vk::Extent2D::default().width(1).height(1),
             bytes_per_block: 4,
         },
         _ => {
@@ -246,14 +251,14 @@ impl ImageView {
         let aspect_mask = format_aspect(image.format);
         let image_view_info = vk::ImageViewCreateInfo::default()
             .image(image.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
             .format(image.format)
+            .view_type(vk::ImageViewType::TYPE_2D)
             .subresource_range(vk::ImageSubresourceRange {
                 base_mip_level: range.base_mip_level,
                 level_count: range.mip_level_count,
                 base_array_layer: 0,
-                aspect_mask,
                 layer_count: 1,
+                aspect_mask,
             });
         let view = unsafe { device.create_image_view(&image_view_info, None)? };
         Ok(ImageView { view, range })
@@ -268,9 +273,7 @@ impl ImageView {
 
 fn memory_type_index(device: &Device, type_bits: u32, flags: vk::MemoryPropertyFlags) -> u32 {
     for (index, memory_type) in device.memory_properties.memory_types.iter().enumerate() {
-        let has_bits = type_bits & (1 << index) != 0;
-        let has_flags = memory_type.property_flags.contains(flags);
-        if has_bits && has_flags {
+        if type_bits & (1 << index) != 0 && memory_type.property_flags.contains(flags) {
             return index as u32;
         }
     }
@@ -410,10 +413,8 @@ impl Allocator {
     }
 
     pub fn destroy(&mut self, device: &Device) {
-        for (_, blocks) in self.blocks.drain() {
-            for block in blocks {
-                block.destroy(device);
-            }
+        for block in self.blocks.drain().flat_map(|(_, blocks)| blocks) {
+            block.destroy(device);
         }
     }
 }

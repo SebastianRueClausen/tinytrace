@@ -15,6 +15,7 @@ pub struct Device {
     pub descriptor_buffer: ext::descriptor_buffer::Device,
     pub acceleration_structure: khr::acceleration_structure::Device,
     pub limits: vk::PhysicalDeviceLimits,
+    pub descriptor_buffer_properties: vk::PhysicalDeviceDescriptorBufferPropertiesEXT<'static>,
 }
 
 impl Device {
@@ -81,6 +82,8 @@ impl Device {
         };
         let descriptor_buffer = ext::descriptor_buffer::Device::new(instance, &device);
         let acceleration_structure = khr::acceleration_structure::Device::new(instance, &device);
+        let descriptor_buffer_properties =
+            get_descriptor_buffer_properties(instance, physical_device);
         Ok(Self {
             device,
             physical_device,
@@ -90,6 +93,7 @@ impl Device {
             queue,
             descriptor_buffer,
             acceleration_structure,
+            descriptor_buffer_properties,
             limits,
         })
     }
@@ -138,6 +142,20 @@ fn get_graphics_queue_family_index(
                 .contains(vk::QueueFlags::GRAPHICS)
                 .then_some(queue_index as u32)
         })
+}
+
+fn get_descriptor_buffer_properties(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+) -> vk::PhysicalDeviceDescriptorBufferPropertiesEXT<'static> {
+    unsafe {
+        let mut descriptor_buffer_properties =
+            vk::PhysicalDeviceDescriptorBufferPropertiesEXT::default();
+        let mut props =
+            vk::PhysicalDeviceProperties2::default().push_next(&mut descriptor_buffer_properties);
+        instance.get_physical_device_properties2(physical_device, &mut props);
+        descriptor_buffer_properties
+    }
 }
 
 fn select_physical_device(instance: &Instance) -> Result<(vk::PhysicalDevice, u32), Error> {

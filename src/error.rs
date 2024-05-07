@@ -8,4 +8,6 @@ pub enum Error {
     Loading(#[from] ash::LoadingError),
     #[error("no suitable device found")]
     NoDevice,
+    #[error("failed to compile shader: {0}")]
+    Compilation(#[from] shaderc::Error),
 }

@@ -14,7 +14,7 @@ impl Access {
         let write_set = vk::AccessFlags2::MEMORY_WRITE
             | vk::AccessFlags2::SHADER_STORAGE_WRITE
             | vk::AccessFlags2::TRANSFER_WRITE;
-        write_set.contains(self.access)
+        write_set.intersects(self.access)
     }
 
     fn image_layout(&self) -> vk::ImageLayout {

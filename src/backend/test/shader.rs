@@ -18,14 +18,15 @@ fn compute_shader() {
             .unwrap()
     };
 
-    let src = create_storage_buffer();
-    let dst = create_storage_buffer();
+    let a = create_storage_buffer();
+    let b = create_storage_buffer();
+    let c = create_storage_buffer();
 
     let data: Box<[u8]> = (0..=255).collect();
 
     context
         .write_buffers(&[BufferWrite {
-            buffer: src.clone(),
+            buffer: a.clone(),
             data: &data,
         }])
         .unwrap();
@@ -53,10 +54,17 @@ fn compute_shader() {
     let shader = context.create_shader(source, grid_size, &bindings).unwrap();
 
     context.bind_shader(&shader);
-    context.bind_buffer("src", &src);
-    context.bind_buffer("dst", &dst);
+
+    // `a` to `b`.
+    context.bind_buffer("src", &a);
+    context.bind_buffer("dst", &b);
     context.dispatch(256, 1);
 
-    let download = context.download(&[dst.clone()], &[]).unwrap();
-    assert_eq!(data, download.buffers[&dst]);
+    // `b` to `c`.
+    context.bind_buffer("src", &b);
+    context.bind_buffer("dst", &c);
+    context.dispatch(256, 1);
+
+    let download = context.download(&[c.clone()], &[]).unwrap();
+    assert_eq!(data, download.buffers[&c]);
 }

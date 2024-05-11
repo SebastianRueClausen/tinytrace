@@ -191,7 +191,7 @@ enum BoundResource {
 pub(super) struct BoundShader {
     shader: Handle<Shader>,
     bound_descriptors: HashMap<&'static str, BoundResource>,
-    /// `true` if this shader just has been dispatched.
+    /// `true` if this shader wast just dispatched.
     has_been_dispatched: bool,
 }
 
@@ -489,12 +489,12 @@ impl Context {
         let bound_shader = self.bound_shader_mut();
         bound_shader.has_been_dispatched = true;
 
-        let (mut buffers, mut images) = (Vec::new(), Vec::new());
         let create_access = |access: vk::AccessFlags2| Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access,
         };
 
+        let (mut buffers, mut images) = (Vec::new(), Vec::new());
         bound_shader
             .bound_descriptors
             .values()

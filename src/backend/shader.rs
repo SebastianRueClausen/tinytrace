@@ -6,11 +6,7 @@ use ash::vk;
 use super::device::Device;
 use super::glsl::render_shader;
 use super::sync::Access;
-use super::{Buffer, Context, Handle, Image, Sampler};
-use crate::{
-    backend::Lifetime,
-    error::{Error, Result},
-};
+use super::{Buffer, Context, Error, Handle, Image, Lifetime, Result, Sampler};
 
 #[derive(Debug, Clone)]
 pub enum BindingType {
@@ -190,7 +186,7 @@ enum BoundResource {
 #[derive(Debug)]
 pub(super) struct BoundShader {
     shader: Handle<Shader>,
-    bound_descriptors: HashMap<&'static str, BoundResource>,
+    bound: HashMap<&'static str, BoundResource>,
     /// `true` if this shader wast just dispatched.
     has_been_dispatched: bool,
 }
@@ -202,7 +198,7 @@ impl BoundShader {
         image: &Handle<Image>,
         flags: vk::AccessFlags2,
     ) -> bool {
-        self.bound_descriptors
+        self.bound
             .insert(name, BoundResource::Image(image.clone(), flags));
         mem::take(&mut self.has_been_dispatched)
     }
@@ -213,7 +209,7 @@ impl BoundShader {
         buffer: &Handle<Buffer>,
         flags: vk::AccessFlags2,
     ) -> bool {
-        self.bound_descriptors
+        self.bound
             .insert(name, BoundResource::Buffer(buffer.clone(), flags));
         mem::take(&mut self.has_been_dispatched)
     }
@@ -290,12 +286,16 @@ impl DescriptorBuffer {
         );
     }
 
-    fn bind_range(&mut self, size: vk::DeviceSize) {
+    // Allocate new range of `size` bytes. This is where following writes will be located.
+    fn allocate_range(&mut self, size: vk::DeviceSize) {
         self.check_range_increase(size as usize);
         self.bound_range.start = self.bound_range.end;
         self.bound_range.end += size as usize;
     }
 
+    // When a bound shader is run multiple times and one or more bindings change, the
+    // descriptor buffer data has to be duplicated in order to not overwrite data for the
+    // previous dispatch.
     fn maybe_duplicate_range(&mut self, duplicate: bool) {
         if duplicate {
             let range_size = self.bound_range.end - self.bound_range.start;
@@ -304,7 +304,7 @@ impl DescriptorBuffer {
                 let start = self.data.add(self.bound_range.start);
                 self.data.add(range_size).copy_from(start, range_size);
             }
-            self.bind_range(range_size as vk::DeviceSize);
+            self.allocate_range(range_size as vk::DeviceSize);
         }
     }
 }
@@ -400,7 +400,7 @@ impl Context {
 
     pub fn bind_shader(&mut self, shader: &Handle<Shader>) {
         self.bound_shader = Some(BoundShader {
-            bound_descriptors: HashMap::default(),
+            bound: HashMap::default(),
             shader: shader.clone(),
             has_been_dispatched: false,
         });
@@ -411,7 +411,7 @@ impl Context {
                 .cmd_bind_pipeline(*self.command_buffer, bind_point, pipeline.pipeline);
         }
         self.descriptor_buffer
-            .bind_range(pipeline.descriptor_size(&self.device));
+            .allocate_range(pipeline.descriptor_size(&self.device));
     }
 
     fn bound_shader(&self) -> &BoundShader {
@@ -485,6 +485,26 @@ impl Context {
             .write_buffer(&self.device, address, size, &binding);
     }
 
+    fn set_descriptor(&self, offset: u64, layout: vk::PipelineLayout) {
+        let point = vk::PipelineBindPoint::COMPUTE;
+        let buffer = &self.command_buffer;
+        unsafe {
+            let loader = &self.device.descriptor_buffer;
+            loader.cmd_set_descriptor_buffer_offsets(**buffer, point, layout, 0, &[0], &[offset]);
+        }
+    }
+
+    fn check_all_bindings_are_bound(&self, bound_shader: &BoundShader) {
+        let bindings = &self.shader(&bound_shader.shader).bindings;
+        let mut missing = bindings
+            .keys()
+            .filter(|binding| !bound_shader.bound.contains_key(*binding));
+        if let Some(missing) = missing.next() {
+            panic!("binding `{missing}` is not bound");
+        }
+    }
+
+    /// Dispatch bound shader with `width` * `height` threads.
     pub fn dispatch(&mut self, width: u32, height: u32) {
         let bound_shader = self.bound_shader_mut();
         bound_shader.has_been_dispatched = true;
@@ -496,7 +516,7 @@ impl Context {
 
         let (mut buffers, mut images) = (Vec::new(), Vec::new());
         bound_shader
-            .bound_descriptors
+            .bound
             .values()
             .for_each(|resource| match resource.clone() {
                 BoundResource::Buffer(buffer, access) => {
@@ -508,20 +528,13 @@ impl Context {
             });
         self.access_resources(&images, &buffers);
 
-        let shader = self.shader(&self.bound_shader().shader);
+        let bound_shader = self.bound_shader();
+        self.check_all_bindings_are_bound(bound_shader);
+
+        let shader = self.shader(&bound_shader.shader);
         let offset = self.descriptor_buffer.bound_range.start as vk::DeviceSize;
-        unsafe {
-            self.device
-                .descriptor_buffer
-                .cmd_set_descriptor_buffer_offsets(
-                    *self.command_buffer,
-                    vk::PipelineBindPoint::COMPUTE,
-                    shader.layout,
-                    0,
-                    &[0],
-                    &[offset],
-                );
-        }
+        self.set_descriptor(offset, shader.layout);
+
         let width = width.div_ceil(shader.block_size.width);
         let height = height.div_ceil(shader.block_size.height);
         unsafe {

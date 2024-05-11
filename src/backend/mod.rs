@@ -1,7 +1,25 @@
+//! # The backend tinytrace.
+//!
+//! The Vulkan backend of tinytrace. It is written to both have a simple implementation and be
+//! simple to use. It makes a few compromises to make this possible:
+//! * Only use compute shaders.
+//! * Only use a single command buffer.
+//! * Somewhat naive synchronization.
+//! * Limited use of buffers and images.
+//!
+//! In order to not be painful to use, it does a lot of stuff automatically:
+//! * Synchronization.
+//! * Uploading and downloading of data.
+//! * Descriptor management.
+//! * Resource cleanup.
+//!
+//! It's not really a safe abtraction, but does catch a foot guns.
+
 pub mod command;
 pub mod copy;
 mod device;
 mod glsl;
+mod handle;
 mod instance;
 pub mod resource;
 mod shader;
@@ -10,18 +28,15 @@ mod sync;
 #[cfg(test)]
 mod test;
 
-use std::{
-    collections::HashMap,
-    hash::{self, Hash},
-    marker::PhantomData,
-    ops, slice,
-};
+use std::collections::HashMap;
+use std::{ops, slice};
 
 use super::error::{Error, Result};
 use ash::vk;
 use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
+pub use handle::Handle;
 use instance::Instance;
 pub use resource::{
     Allocator, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
@@ -37,54 +52,6 @@ pub enum Lifetime {
     Surface,
     Scene,
     Frame,
-}
-
-/// The handle of a resource.
-#[derive(Debug, Copy)]
-pub struct Handle<T> {
-    lifetime: Lifetime,
-    index: usize,
-    epoch: usize,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> Handle<T> {
-    fn new(lifetime: Lifetime, epoch: usize, vec: &mut Vec<T>, value: T) -> Self {
-        vec.push(value);
-        Self {
-            index: vec.len() - 1,
-            epoch,
-            lifetime,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T> PartialEq for Handle<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.epoch == other.epoch && self.lifetime == other.lifetime
-    }
-}
-
-impl<T> Eq for Handle<T> {}
-
-impl<T> Clone for Handle<T> {
-    fn clone(&self) -> Self {
-        Self {
-            lifetime: self.lifetime,
-            index: self.index,
-            epoch: self.epoch,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T> hash::Hash for Handle<T> {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.lifetime.hash(state);
-        self.index.hash(state);
-        self.epoch.hash(state);
-    }
 }
 
 #[derive(Default, Debug)]
@@ -146,16 +113,19 @@ impl Context {
     pub fn new() -> Result<Self> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
+
         let mut static_pool = Pool::default();
         let descriptor_buffer = create_descriptor_buffer(&device, &mut static_pool)?;
+
         let context = Self {
-            pools: [(Lifetime::Static, static_pool)].into_iter().collect(),
+            pools: HashMap::from([(Lifetime::Static, static_pool)]),
             command_buffer: CommandBuffer::new(&device)?,
             descriptor_buffer,
             bound_shader: None,
             device,
             instance,
         };
+
         context.begind_command_buffer()?;
         Ok(context)
     }
@@ -253,6 +223,7 @@ impl Context {
         self.device.wait_until_idle()?;
         self.device.clear_command_pool()?;
         self.bound_shader = None;
+        self.descriptor_buffer.bound_range = 0..0;
         self.begind_command_buffer()
     }
 }

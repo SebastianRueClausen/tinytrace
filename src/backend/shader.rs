@@ -16,7 +16,7 @@ use crate::{
 pub enum BindingType {
     StorageBuffer {
         ty: &'static str,
-        count: u32,
+        array: bool,
         writes: bool,
     },
     UniformBuffer {
@@ -45,9 +45,7 @@ impl BindingType {
 
     fn count(&self) -> u32 {
         match self {
-            Self::StorageBuffer { count, .. }
-            | Self::SampledImage { count }
-            | Self::StorageImage { count, .. } => *count,
+            Self::SampledImage { count } | Self::StorageImage { count, .. } => *count,
             _ => 1,
         }
     }
@@ -266,24 +264,23 @@ impl DescriptorBuffer {
         }
     }
 
-    fn write_buffers(
+    fn write_buffer(
         &mut self,
         device: &Device,
-        writes: &[(vk::DeviceAddress, vk::DeviceSize)],
+        address: vk::DeviceAddress,
+        size: vk::DeviceSize,
         binding: &ShaderBinding,
     ) {
-        for (index, (address, size)) in writes.iter().enumerate() {
-            let descriptor_buffer_info = vk::DescriptorAddressInfoEXT::default()
-                .address(*address)
-                .range(*size);
-            let get_info =
-                vk::DescriptorGetInfoEXT::default()
-                    .ty(binding.ty)
-                    .data(vk::DescriptorDataEXT {
-                        p_uniform_buffer: &descriptor_buffer_info as *const _,
-                    });
-            self.write(device, binding, index, &get_info);
-        }
+        let descriptor_buffer_info = vk::DescriptorAddressInfoEXT::default()
+            .address(address)
+            .range(size);
+        let get_info =
+            vk::DescriptorGetInfoEXT::default()
+                .ty(binding.ty)
+                .data(vk::DescriptorDataEXT {
+                    p_uniform_buffer: &descriptor_buffer_info as *const _,
+                });
+        self.write(device, binding, 0, &get_info);
     }
 
     fn check_range_increase(&self, size: usize) {
@@ -476,27 +473,16 @@ impl Context {
         self.bind_sampled_images(name, sampler, &[image.clone()]);
     }
 
-    pub fn bind_buffers(&mut self, name: &'static str, buffers: &[Handle<Buffer>]) {
+    pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) {
         let binding = *self.binding(name);
         let bound_shader = self.bound_shader_mut();
-        let duplicate_descriptor = buffers.iter().fold(false, |duplicate, buffer| {
-            duplicate | bound_shader.bind_buffer(name, buffer, binding.access_flags)
-        });
-        let writes: Vec<_> = buffers
-            .iter()
-            .map(|buffer| {
-                let buffer = self.buffer(buffer);
-                (buffer.device_address(&self.device), buffer.size)
-            })
-            .collect();
+        let duplicate_descriptor = bound_shader.bind_buffer(name, buffer, binding.access_flags);
+        let buffer = self.buffer(buffer);
+        let (address, size) = (buffer.device_address(&self.device), buffer.size);
         self.descriptor_buffer
             .maybe_duplicate_range(duplicate_descriptor);
         self.descriptor_buffer
-            .write_buffers(&self.device, &writes, &binding);
-    }
-
-    pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) {
-        self.bind_buffers(name, &[buffer.clone()]);
+            .write_buffer(&self.device, address, size, &binding);
     }
 
     pub fn dispatch(&mut self, width: u32, height: u32) {

@@ -1,19 +1,7 @@
 use ash::vk;
 
-use super::*;
-
-fn create_test_buffer(context: &mut Context) -> Handle<Buffer> {
-    context
-        .create_buffer(
-            Lifetime::Frame,
-            &BufferRequest {
-                ty: BufferType::Uniform,
-                memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                size: 256,
-            },
-        )
-        .unwrap()
-}
+use super::create_test_buffer;
+use crate::backend::*;
 
 #[test]
 fn transfer() {
@@ -91,36 +79,4 @@ fn transfer_image_mips() {
     // Check that the mips are packed tightly.
     assert_eq!(download.images[&image][..mips[0].len()], *mips[0]);
     assert_eq!(download.images[&image][mips[0].len()..], *mips[1]);
-}
-
-#[test]
-fn compute_shader() {
-    let mut context = Context::new().unwrap();
-    let a = create_test_buffer(&mut context);
-    let b = create_test_buffer(&mut context);
-    let c = create_test_buffer(&mut context);
-    let source = "void main() { }";
-    let bindings = [
-        Binding {
-            name: "a",
-            ty: BindingType::UniformBuffer { ty: "int" },
-        },
-        Binding {
-            name: "b",
-            ty: BindingType::UniformBuffer { ty: "int" },
-        },
-    ];
-    let grid_size = vk::Extent2D::default().width(32).height(32);
-    let shader = context.create_shader(source, grid_size, &bindings).unwrap();
-
-    context.bind_shader(&shader);
-    // First dispatch.
-    context.bind_buffer("a", &a);
-    context.bind_buffer("b", &b);
-    context.dispatch(128, 128);
-    // Second dispatch.
-    context.bind_buffer("b", &c);
-    context.dispatch(128, 128);
-
-    context.execute_commands().unwrap();
 }

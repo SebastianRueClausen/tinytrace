@@ -8,10 +8,10 @@ const PRELUDE: &str = r#"
 
 fn render_binding(name: &str, ty: &BindingType, set: u32, index: u32) -> String {
     let classifier = |writes| if writes { "" } else { "readonly " };
-    let brackets = |count| if count > 1 { "[]" } else { "" };
     match ty {
-        BindingType::StorageBuffer { ty, count, writes } => {
-            let (brackets, classifier) = (brackets(*count), classifier(*writes));
+        BindingType::StorageBuffer { ty, array, writes } => {
+            let classifier = classifier(*writes);
+            let brackets = if *array { "[]" } else { "" };
             format!("{classifier}buffer Set{set}Binding{index} {{ {ty} {name}{brackets}; }};")
         }
         BindingType::UniformBuffer { ty } => {
@@ -21,11 +21,12 @@ fn render_binding(name: &str, ty: &BindingType, set: u32, index: u32) -> String 
             format!("uniform accelerationStructureEXT {name};")
         }
         BindingType::SampledImage { count } => {
-            format!("uniform sampled2D {name}{};", brackets(*count))
+            let brackets = if *count > 1 { "[]" } else { "" };
+            format!("uniform sampled2D {name}{};", brackets)
         }
         BindingType::StorageImage { count, writes } => {
-            let (brackets, classifier) = (brackets(*count), classifier(*writes));
-            format!("{classifier} uniform image2D {name}{brackets};")
+            let brackets = if *count > 1 { "[]" } else { "" };
+            format!("{} uniform image2D {name}{brackets};", classifier(*writes))
         }
     }
 }

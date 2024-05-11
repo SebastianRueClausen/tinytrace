@@ -64,7 +64,12 @@ impl Context {
         let scratch = Buffer::new(
             &self.device,
             &mut pool.allocator,
-            &BufferRequest::scratch(size),
+            &BufferRequest {
+                ty: super::BufferType::Scratch,
+                memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                size,
+            },
         )?;
         let mapping = pool.allocator.map(&self.device, scratch.memory_index)?;
         Ok((scratch, mapping))

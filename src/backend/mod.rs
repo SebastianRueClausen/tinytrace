@@ -24,7 +24,8 @@ pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
 use instance::Instance;
 pub use resource::{
-    Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, Sampler, SamplerRequest,
+    Allocator, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
+    SamplerRequest,
 };
 pub use shader::{Binding, BindingType, Shader};
 use shader::{BoundShader, DescriptorBuffer};
@@ -90,7 +91,6 @@ impl<T> hash::Hash for Handle<T> {
 struct Pool {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
-    image_views: Vec<vk::ImageView>,
     samplers: Vec<Sampler>,
     shaders: Vec<Shader>,
     allocator: Allocator,
@@ -101,9 +101,6 @@ impl Pool {
     fn clear(&mut self, device: &Device) {
         self.buffers.drain(..).for_each(|b| b.destroy(device));
         self.images.drain(..).for_each(|i| i.destroy(device));
-        self.image_views
-            .drain(..)
-            .for_each(|v| unsafe { device.destroy_image_view(v, None) });
         self.shaders.drain(..).for_each(|s| s.destroy(device));
         self.allocator.destroy(device);
         self.epoch += 1;
@@ -132,10 +129,7 @@ impl Drop for Context {
 fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<DescriptorBuffer> {
     let request = BufferRequest {
         size: 1024 * 1024 * 4,
-        usage_flags: vk::BufferUsageFlags::TRANSFER_DST
-            | vk::BufferUsageFlags::RESOURCE_DESCRIPTOR_BUFFER_EXT
-            | vk::BufferUsageFlags::SAMPLER_DESCRIPTOR_BUFFER_EXT
-            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        ty: BufferType::Descriptor,
         memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     };
@@ -243,12 +237,6 @@ impl Context {
         let pool = self.pools.entry(lifetime).or_default();
         Sampler::new(&self.device, request)
             .map(|sampler| Handle::new(lifetime, pool.epoch, &mut pool.samplers, sampler))
-    }
-
-    fn get_view(&mut self, image: &Handle<Image>, range: ImageRange) -> Result<vk::ImageView> {
-        resource::create_image_view(&self.device, self.image(image), range).inspect(|view| {
-            self.pool_mut(Lifetime::Frame).image_views.push(*view);
-        })
     }
 
     pub fn execute_commands(&mut self) -> Result<()> {

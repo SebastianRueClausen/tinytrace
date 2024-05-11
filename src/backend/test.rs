@@ -7,9 +7,7 @@ fn create_test_buffer(context: &mut Context) -> Handle<Buffer> {
         .create_buffer(
             Lifetime::Frame,
             &BufferRequest {
-                usage_flags: vk::BufferUsageFlags::TRANSFER_SRC
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                ty: BufferType::Uniform,
                 memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 size: 256,
             },
@@ -28,7 +26,7 @@ fn transfer() {
             &ImageRequest {
                 extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                usage_flags: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                ty: ImageType::Texture,
                 memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 mip_level_count: 1,
             },
@@ -69,7 +67,7 @@ fn transfer_image_mips() {
             &ImageRequest {
                 extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                usage_flags: vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                ty: ImageType::Texture,
                 memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 mip_level_count: 2,
             },

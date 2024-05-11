@@ -7,23 +7,36 @@ use super::sync::Access;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy)]
-pub struct BufferRequest {
-    pub size: vk::DeviceSize,
-    pub usage_flags: vk::BufferUsageFlags,
-    pub memory_flags: vk::MemoryPropertyFlags,
+pub enum BufferType {
+    Uniform,
+    Storage,
+    Scratch,
+    Descriptor,
 }
 
-impl BufferRequest {
-    pub fn scratch(size: vk::DeviceSize) -> Self {
-        Self {
-            size,
-            usage_flags: vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST
-                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-        }
+impl BufferType {
+    fn usage_flags(&self) -> vk::BufferUsageFlags {
+        let base = vk::BufferUsageFlags::TRANSFER_SRC
+            | vk::BufferUsageFlags::TRANSFER_DST
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        let flags = match self {
+            BufferType::Uniform => vk::BufferUsageFlags::UNIFORM_BUFFER,
+            BufferType::Storage => vk::BufferUsageFlags::STORAGE_BUFFER,
+            BufferType::Descriptor => {
+                vk::BufferUsageFlags::SAMPLER_DESCRIPTOR_BUFFER_EXT
+                    | vk::BufferUsageFlags::RESOURCE_DESCRIPTOR_BUFFER_EXT
+            }
+            _ => vk::BufferUsageFlags::empty(),
+        };
+        base | flags
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BufferRequest {
+    pub size: vk::DeviceSize,
+    pub ty: BufferType,
+    pub memory_flags: vk::MemoryPropertyFlags,
 }
 
 #[derive(Debug)]
@@ -50,9 +63,10 @@ impl Buffer {
         request: &BufferRequest,
     ) -> Result<Self> {
         let size = request.size.max(4);
+        let usage_flags = request.ty.usage_flags();
         let buffer_info = vk::BufferCreateInfo::default()
             .size(size)
-            .usage(request.usage_flags);
+            .usage(usage_flags);
         let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
         let memory_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let (memory, memory_index) =
@@ -62,7 +76,7 @@ impl Buffer {
         }
         Ok(Self {
             access: Access::default(),
-            usage_flags: request.usage_flags,
+            usage_flags,
             size,
             buffer,
             memory_index,
@@ -88,18 +102,36 @@ fn format_aspect(format: vk::Format) -> vk::ImageAspectFlags {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ImageType {
+    Texture,
+    Storage,
+}
+
+impl ImageType {
+    fn usage_flags(&self) -> vk::ImageUsageFlags {
+        let base = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+        let flags = match self {
+            ImageType::Texture => vk::ImageUsageFlags::SAMPLED,
+            ImageType::Storage => vk::ImageUsageFlags::STORAGE,
+        };
+        base | flags
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageRequest {
     pub extent: vk::Extent3D,
     pub format: vk::Format,
     pub mip_level_count: u32,
-    pub usage_flags: vk::ImageUsageFlags,
+    pub ty: ImageType,
     pub memory_flags: vk::MemoryPropertyFlags,
 }
 
 #[derive(Debug)]
 pub struct Image {
     pub image: vk::Image,
+    pub view: vk::ImageView,
     pub extent: vk::Extent3D,
     pub format: vk::Format,
     pub aspect: vk::ImageAspectFlags,
@@ -121,6 +153,7 @@ impl ops::Deref for Image {
 impl Image {
     pub fn new(device: &Device, allocator: &mut Allocator, request: &ImageRequest) -> Result<Self> {
         let layout = vk::ImageLayout::UNDEFINED;
+        let usage_flags = request.ty.usage_flags();
         let image_info = vk::ImageCreateInfo::default()
             .format(request.format)
             .extent(request.extent)
@@ -128,7 +161,7 @@ impl Image {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(request.usage_flags)
+            .usage(usage_flags)
             .image_type(vk::ImageType::TYPE_2D)
             .initial_layout(layout);
         let image = unsafe { device.create_image(&image_info, None)? };
@@ -139,14 +172,15 @@ impl Image {
             device.bind_image_memory(image, memory, index.offset)?;
         }
         Ok(Self {
+            view: create_image_view(device, image, request.format, request.mip_level_count)?,
             access: Access::default(),
             aspect: format_aspect(request.format),
             extent: request.extent,
             format: request.format,
             mip_level_count: request.mip_level_count,
             layout: vk::ImageLayout::UNDEFINED,
-            usage_flags: request.usage_flags,
             swapchain: false,
+            usage_flags,
             image,
         })
     }
@@ -174,6 +208,9 @@ impl Image {
                 device.destroy_image(self.image, None);
             }
         }
+        unsafe {
+            device.destroy_image_view(self.view, None);
+        };
     }
 }
 
@@ -210,32 +247,20 @@ pub fn format_info(format: vk::Format) -> FormatInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImageRange {
-    pub mip_level_count: u32,
-    pub base_mip_level: u32,
-}
-
-impl ImageRange {
-    pub const BASE: Self = Self {
-        mip_level_count: 1,
-        base_mip_level: 0,
-    };
-}
-
 pub fn create_image_view(
     device: &Device,
-    image: &Image,
-    range: ImageRange,
+    image: vk::Image,
+    format: vk::Format,
+    mip_level_count: u32,
 ) -> Result<vk::ImageView> {
-    let aspect_mask = format_aspect(image.format);
+    let aspect_mask = format_aspect(format);
     let image_view_info = vk::ImageViewCreateInfo::default()
-        .image(image.image)
-        .format(image.format)
+        .image(image)
+        .format(format)
         .view_type(vk::ImageViewType::TYPE_2D)
         .subresource_range(vk::ImageSubresourceRange {
-            base_mip_level: range.base_mip_level,
-            level_count: range.mip_level_count,
+            base_mip_level: 0,
+            level_count: mip_level_count,
             base_array_layer: 0,
             layer_count: 1,
             aspect_mask,

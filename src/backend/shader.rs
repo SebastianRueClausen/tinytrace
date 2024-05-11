@@ -6,7 +6,7 @@ use ash::vk;
 use super::device::Device;
 use super::glsl::render_shader;
 use super::sync::Access;
-use super::{Buffer, Context, Handle, Image, ImageRange, Sampler};
+use super::{Buffer, Context, Handle, Image, Sampler};
 use crate::{
     backend::Lifetime,
     error::{Error, Result},
@@ -435,29 +435,22 @@ impl Context {
         &mut self,
         name: &'static str,
         sampler: Option<&Handle<Sampler>>,
-        images: &[(Handle<Image>, ImageRange)],
+        images: &[Handle<Image>],
     ) {
         let binding = *self.binding(name);
         let bound_shader = self.bound_shader_mut();
-        let duplicate_descriptor = images.iter().fold(false, |duplicate, (image, _)| {
+        let duplicate_descriptor = images.iter().fold(false, |duplicate, image| {
             duplicate | bound_shader.bind_image(name, image, binding.access_flags)
         });
         self.descriptor_buffer
             .maybe_duplicate_range(duplicate_descriptor);
-        let image_views: Vec<_> = images
-            .iter()
-            .map(|(image, range)| self.get_view(image, *range).expect("failed to create view"))
-            .collect();
+        let image_views: Vec<_> = images.iter().map(|image| self.image(image).view).collect();
         let sampler = sampler.map(|sampler| self.sampler(sampler).sampler);
         self.descriptor_buffer
             .write_images(&self.device, &image_views, sampler, &binding);
     }
 
-    pub fn bind_storage_images(
-        &mut self,
-        name: &'static str,
-        images: &[(Handle<Image>, ImageRange)],
-    ) {
+    pub fn bind_storage_images(&mut self, name: &'static str, images: &[Handle<Image>]) {
         self.bind_images(name, None, images);
     }
 
@@ -465,18 +458,13 @@ impl Context {
         &mut self,
         name: &'static str,
         sampler: &Handle<Sampler>,
-        images: &[(Handle<Image>, ImageRange)],
+        images: &[Handle<Image>],
     ) {
         self.bind_images(name, Some(sampler), images);
     }
 
-    pub fn bind_storage_image(
-        &mut self,
-        name: &'static str,
-        image: &Handle<Image>,
-        range: ImageRange,
-    ) {
-        self.bind_storage_images(name, &[(image.clone(), range)]);
+    pub fn bind_storage_image(&mut self, name: &'static str, image: &Handle<Image>) {
+        self.bind_storage_images(name, &[image.clone()]);
     }
 
     pub fn bind_sampled_image(
@@ -484,9 +472,8 @@ impl Context {
         name: &'static str,
         sampler: &Handle<Sampler>,
         image: &Handle<Image>,
-        range: ImageRange,
     ) {
-        self.bind_sampled_images(name, sampler, &[(image.clone(), range)]);
+        self.bind_sampled_images(name, sampler, &[image.clone()]);
     }
 
     pub fn bind_buffers(&mut self, name: &'static str, buffers: &[Handle<Buffer>]) {

@@ -1,16 +1,16 @@
-use std::{fs, slice};
+use std::collections::HashMap;
+use std::{fs, mem, ops, slice};
 
 use ash::vk;
 
 use super::device::Device;
-use super::{Context, Handle};
-use crate::{backend::Lifetime, error::Error};
-
-const SHADER_PRELUDE: &str = r#"
-#version 460
-#extension GL_GOOGLE_include_directive: require
-#extension GL_EXT_nonuniform_qualifier: require
-"#;
+use super::glsl::render_shader;
+use super::sync::Access;
+use super::{Buffer, Context, Handle, Image, ImageRange, Sampler};
+use crate::{
+    backend::Lifetime,
+    error::{Error, Result},
+};
 
 #[derive(Debug, Clone)]
 pub enum BindingType {
@@ -33,30 +33,6 @@ pub enum BindingType {
 }
 
 impl BindingType {
-    fn to_glsl(&self, name: &str, set: u32, index: u32) -> String {
-        let classifier = |writes| if writes { "" } else { "readonly " };
-        let brackets = |count| if count > 1 { "[]" } else { "" };
-        match self {
-            Self::StorageBuffer { ty, count, writes } => {
-                let (brackets, classifier) = (brackets(*count), classifier(*writes));
-                format!("{classifier}buffer Set{set}Binding{index} {{ {ty} {name}{brackets}; }};")
-            }
-            Self::UniformBuffer { ty } => {
-                format!("uniform Set{set}Index{index} {{ {ty} {name}; }};")
-            }
-            Self::AccelerationStructure => {
-                format!("uniform accelerationStructureEXT {name};")
-            }
-            Self::SampledImage { count } => {
-                format!("uniform sampled2D {name}{};", brackets(*count))
-            }
-            Self::StorageImage { count, writes } => {
-                let (brackets, classifier) = (brackets(*count), classifier(*writes));
-                format!("{classifier} uniform image2D {name}{brackets};")
-            }
-        }
-    }
-
     fn descriptor_type(&self) -> vk::DescriptorType {
         match self {
             Self::StorageBuffer { .. } => vk::DescriptorType::STORAGE_BUFFER,
@@ -64,18 +40,6 @@ impl BindingType {
             Self::AccelerationStructure => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
             Self::SampledImage { .. } => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             Self::StorageImage { .. } => vk::DescriptorType::STORAGE_IMAGE,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn descriptor_size(&self, device: &Device) -> usize {
-        let props = &device.descriptor_buffer_properties;
-        match self {
-            Self::StorageBuffer { .. } => props.storage_buffer_descriptor_size,
-            Self::UniformBuffer { .. } => props.uniform_buffer_descriptor_size,
-            Self::AccelerationStructure => props.acceleration_structure_descriptor_size,
-            Self::SampledImage { .. } => props.sampled_image_descriptor_size,
-            Self::StorageImage { .. } => props.storage_image_descriptor_size,
         }
     }
 
@@ -98,7 +62,7 @@ pub struct Binding {
 fn create_descriptor_layout(
     device: &Device,
     bindings: &[Binding],
-) -> Result<vk::DescriptorSetLayout, Error> {
+) -> Result<vk::DescriptorSetLayout> {
     let flags: Vec<_> = bindings
         .iter()
         .map(|binding| {
@@ -131,20 +95,12 @@ fn create_descriptor_layout(
     }
 }
 
-fn bindings_to_glsl(set: u32, bindings: &[Binding]) -> String {
-    let to_glsl = |(index, binding): (usize, &Binding)| {
-        let ty = binding.ty.to_glsl(binding.name, set, index as u32);
-        format!("layout (set = {set}, binding = {index}) {ty}\n")
-    };
-    bindings.iter().enumerate().map(to_glsl).collect()
-}
-
 fn create_shader_module(
     device: &Device,
     source: &str,
     vk::Extent2D { width, height }: vk::Extent2D,
     bindings: &[Binding],
-) -> Result<vk::ShaderModule, Error> {
+) -> Result<vk::ShaderModule> {
     let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.set_include_callback(|name, _, _, _| {
@@ -155,13 +111,7 @@ fn create_shader_module(
                 content,
             })
     });
-
-    // Compose shader source.
-    let grid_size = format!("layout (local_size_x = {width}, local_size_y = {height}) in;\n");
-    let bindings = bindings_to_glsl(0, bindings);
-    let source = format!("{SHADER_PRELUDE}{grid_size}{bindings}{source}");
-
-    // Compile shader.
+    let source = render_shader(width, height, source, bindings);
     let shader_kind = shaderc::ShaderKind::Compute;
     let output = compiler
         .compile_into_spirv(&source, shader_kind, "shader", "main", Some(&options))
@@ -174,13 +124,201 @@ fn create_shader_module(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ShaderBinding {
+    access_flags: vk::AccessFlags2,
+    descriptor_size: usize,
+    descriptor_offset: usize,
+    ty: vk::DescriptorType,
+}
+
+impl ShaderBinding {
+    fn new(
+        device: &Device,
+        ty: &BindingType,
+        layout: vk::DescriptorSetLayout,
+        index: u32,
+    ) -> ShaderBinding {
+        let properties = &device.descriptor_buffer_properties;
+        let (access_flags, descriptor_size) = match ty {
+            BindingType::StorageBuffer { writes, .. } => {
+                let access_flags = vk::AccessFlags2::SHADER_STORAGE_READ
+                    | writes
+                        .then_some(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                        .unwrap_or_default();
+                (access_flags, properties.storage_buffer_descriptor_size)
+            }
+            BindingType::StorageImage { writes, .. } => {
+                let access_flags = vk::AccessFlags2::SHADER_STORAGE_READ
+                    | writes
+                        .then_some(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                        .unwrap_or_default();
+                (access_flags, properties.storage_image_descriptor_size)
+            }
+            BindingType::UniformBuffer { .. } => (
+                vk::AccessFlags2::UNIFORM_READ,
+                properties.uniform_buffer_descriptor_size,
+            ),
+            BindingType::AccelerationStructure => {
+                let descriptor_size = properties.acceleration_structure_descriptor_size;
+                let access_flags = vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+                (access_flags, descriptor_size)
+            }
+            BindingType::SampledImage { .. } => {
+                let descriptor_size = properties.combined_image_sampler_descriptor_size;
+                (vk::AccessFlags2::SHADER_SAMPLED_READ, descriptor_size)
+            }
+        };
+        let descriptor_offset = unsafe {
+            device
+                .descriptor_buffer
+                .get_descriptor_set_layout_binding_offset(layout, index) as usize
+        };
+        ShaderBinding {
+            ty: ty.descriptor_type(),
+            access_flags,
+            descriptor_offset,
+            descriptor_size,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum BoundResource {
+    Buffer(Handle<Buffer>, vk::AccessFlags2),
+    Image(Handle<Image>, vk::AccessFlags2),
+}
+
+#[derive(Debug)]
+pub(super) struct BoundShader {
+    shader: Handle<Shader>,
+    bound_descriptors: HashMap<&'static str, BoundResource>,
+    /// `true` if this shader just has been dispatched.
+    has_been_dispatched: bool,
+}
+
+impl BoundShader {
+    fn bind_image(
+        &mut self,
+        name: &'static str,
+        image: &Handle<Image>,
+        flags: vk::AccessFlags2,
+    ) -> bool {
+        self.bound_descriptors
+            .insert(name, BoundResource::Image(image.clone(), flags));
+        mem::take(&mut self.has_been_dispatched)
+    }
+
+    fn bind_buffer(
+        &mut self,
+        name: &'static str,
+        buffer: &Handle<Buffer>,
+        flags: vk::AccessFlags2,
+    ) -> bool {
+        self.bound_descriptors
+            .insert(name, BoundResource::Buffer(buffer.clone(), flags));
+        mem::take(&mut self.has_been_dispatched)
+    }
+}
+
+pub(super) struct DescriptorBuffer {
+    pub buffer: Handle<Buffer>,
+    pub data: *mut u8,
+    pub size: usize,
+    pub bound_range: ops::Range<usize>,
+}
+
+impl DescriptorBuffer {
+    fn write(
+        &mut self,
+        device: &Device,
+        binding: &ShaderBinding,
+        index: usize,
+        get_info: &vk::DescriptorGetInfoEXT,
+    ) {
+        unsafe {
+            let offset = self.bound_range.start
+                + binding.descriptor_offset
+                + binding.descriptor_size * index;
+            let data = slice::from_raw_parts_mut(self.data.add(offset), binding.descriptor_size);
+            device.descriptor_buffer.get_descriptor(get_info, data);
+        }
+    }
+
+    fn write_images(
+        &mut self,
+        device: &Device,
+        views: &[vk::ImageView],
+        sampler: Option<vk::Sampler>,
+        binding: &ShaderBinding,
+    ) {
+        for (index, view) in views.iter().enumerate() {
+            let descriptor_image_info = vk::DescriptorImageInfo::default()
+                .image_view(*view)
+                .sampler(sampler.unwrap_or_default());
+            let get_info =
+                vk::DescriptorGetInfoEXT::default()
+                    .ty(binding.ty)
+                    .data(vk::DescriptorDataEXT {
+                        p_combined_image_sampler: &descriptor_image_info as *const _,
+                    });
+            self.write(device, binding, index, &get_info);
+        }
+    }
+
+    fn write_buffers(
+        &mut self,
+        device: &Device,
+        writes: &[(vk::DeviceAddress, vk::DeviceSize)],
+        binding: &ShaderBinding,
+    ) {
+        for (index, (address, size)) in writes.iter().enumerate() {
+            let descriptor_buffer_info = vk::DescriptorAddressInfoEXT::default()
+                .address(*address)
+                .range(*size);
+            let get_info =
+                vk::DescriptorGetInfoEXT::default()
+                    .ty(binding.ty)
+                    .data(vk::DescriptorDataEXT {
+                        p_uniform_buffer: &descriptor_buffer_info as *const _,
+                    });
+            self.write(device, binding, index, &get_info);
+        }
+    }
+
+    fn check_range_increase(&self, size: usize) {
+        assert!(
+            size + self.bound_range.end < self.size,
+            "out of descriptor range"
+        );
+    }
+
+    fn bind_range(&mut self, size: vk::DeviceSize) {
+        self.check_range_increase(size as usize);
+        self.bound_range.start = self.bound_range.end;
+        self.bound_range.end += size as usize;
+    }
+
+    fn maybe_duplicate_range(&mut self, duplicate: bool) {
+        if duplicate {
+            let range_size = self.bound_range.end - self.bound_range.start;
+            self.check_range_increase(range_size);
+            unsafe {
+                let start = self.data.add(self.bound_range.start);
+                self.data.add(range_size).copy_from(start, range_size);
+            }
+            self.bind_range(range_size as vk::DeviceSize);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Shader {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub descriptor_layout: vk::DescriptorSetLayout,
-    pub bindings: Vec<Binding>,
-    pub grid_size: vk::Extent2D,
+    bindings: HashMap<&'static str, ShaderBinding>,
+    pub block_size: vk::Extent2D,
 }
 
 impl Shader {
@@ -198,26 +336,26 @@ impl Shader {
     }
 }
 
-impl Context {
-    fn create_pipeline_layout(
-        &self,
-        descriptor_layout: vk::DescriptorSetLayout,
-    ) -> Result<vk::PipelineLayout, Error> {
-        let layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(slice::from_ref(&descriptor_layout));
-        let pipeline_layout = unsafe { self.device.create_pipeline_layout(&layout_info, None)? };
-        Ok(pipeline_layout)
-    }
+fn create_pipeline_layout(
+    device: &Device,
+    descriptor_layout: vk::DescriptorSetLayout,
+) -> Result<vk::PipelineLayout> {
+    let layout_info =
+        vk::PipelineLayoutCreateInfo::default().set_layouts(slice::from_ref(&descriptor_layout));
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+    Ok(pipeline_layout)
+}
 
+impl Context {
     pub fn create_shader(
         &mut self,
         source: &str,
-        grid_size: vk::Extent2D,
+        block_size: vk::Extent2D,
         bindings: &[Binding],
-    ) -> Result<Handle<Shader>, Error> {
-        let module = create_shader_module(&self.device, source, grid_size, bindings)?;
+    ) -> Result<Handle<Shader>> {
+        let module = create_shader_module(&self.device, source, block_size, bindings)?;
         let descriptor_layout = create_descriptor_layout(&self.device, bindings)?;
-        let pipeline_layout = self.create_pipeline_layout(descriptor_layout)?;
+        let pipeline_layout = create_pipeline_layout(&self.device, descriptor_layout)?;
         let stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
@@ -236,9 +374,21 @@ impl Context {
             *pipelines.map_err(|(_, err)| err)?.first().unwrap()
         };
         let pipeline = Shader {
-            bindings: bindings.to_vec(),
+            bindings: bindings
+                .iter()
+                .enumerate()
+                .map(|(index, binding)| {
+                    let shader_binding = ShaderBinding::new(
+                        &self.device,
+                        &binding.ty,
+                        descriptor_layout,
+                        index as u32,
+                    );
+                    (binding.name, shader_binding)
+                })
+                .collect(),
             layout: pipeline_layout,
-            grid_size,
+            block_size,
             descriptor_layout,
             pipeline,
         };
@@ -246,8 +396,164 @@ impl Context {
         Ok(Handle::new(
             Lifetime::Static,
             pool.epoch,
-            &mut pool.pipelines,
+            &mut pool.shaders,
             pipeline,
         ))
+    }
+
+    pub fn bind_shader(&mut self, shader: &Handle<Shader>) {
+        self.bound_shader = Some(BoundShader {
+            bound_descriptors: HashMap::default(),
+            shader: shader.clone(),
+            has_been_dispatched: false,
+        });
+        let bind_point = vk::PipelineBindPoint::COMPUTE;
+        let pipeline = self.shader(shader);
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(*self.command_buffer, bind_point, pipeline.pipeline);
+        }
+        self.descriptor_buffer
+            .bind_range(pipeline.descriptor_size(&self.device));
+    }
+
+    fn bound_shader(&self) -> &BoundShader {
+        self.bound_shader.as_ref().expect("no shader bound")
+    }
+
+    fn bound_shader_mut(&mut self) -> &mut BoundShader {
+        self.bound_shader.as_mut().expect("no shader bound")
+    }
+
+    fn binding(&self, name: &'static str) -> &ShaderBinding {
+        let error = || panic!("no binding with name {name}");
+        let shader = self.shader(&self.bound_shader().shader);
+        shader.bindings.get(name).unwrap_or_else(error)
+    }
+
+    pub fn bind_images(
+        &mut self,
+        name: &'static str,
+        sampler: Option<&Handle<Sampler>>,
+        images: &[(Handle<Image>, ImageRange)],
+    ) {
+        let binding = *self.binding(name);
+        let bound_shader = self.bound_shader_mut();
+        let duplicate_descriptor = images.iter().fold(false, |duplicate, (image, _)| {
+            duplicate | bound_shader.bind_image(name, image, binding.access_flags)
+        });
+        self.descriptor_buffer
+            .maybe_duplicate_range(duplicate_descriptor);
+        let image_views: Vec<_> = images
+            .iter()
+            .map(|(image, range)| self.get_view(image, *range).expect("failed to create view"))
+            .collect();
+        let sampler = sampler.map(|sampler| self.sampler(sampler).sampler);
+        self.descriptor_buffer
+            .write_images(&self.device, &image_views, sampler, &binding);
+    }
+
+    pub fn bind_storage_images(
+        &mut self,
+        name: &'static str,
+        images: &[(Handle<Image>, ImageRange)],
+    ) {
+        self.bind_images(name, None, images);
+    }
+
+    pub fn bind_sampled_images(
+        &mut self,
+        name: &'static str,
+        sampler: &Handle<Sampler>,
+        images: &[(Handle<Image>, ImageRange)],
+    ) {
+        self.bind_images(name, Some(sampler), images);
+    }
+
+    pub fn bind_storage_image(
+        &mut self,
+        name: &'static str,
+        image: &Handle<Image>,
+        range: ImageRange,
+    ) {
+        self.bind_storage_images(name, &[(image.clone(), range)]);
+    }
+
+    pub fn bind_sampled_image(
+        &mut self,
+        name: &'static str,
+        sampler: &Handle<Sampler>,
+        image: &Handle<Image>,
+        range: ImageRange,
+    ) {
+        self.bind_sampled_images(name, sampler, &[(image.clone(), range)]);
+    }
+
+    pub fn bind_buffers(&mut self, name: &'static str, buffers: &[Handle<Buffer>]) {
+        let binding = *self.binding(name);
+        let bound_shader = self.bound_shader_mut();
+        let duplicate_descriptor = buffers.iter().fold(false, |duplicate, buffer| {
+            duplicate | bound_shader.bind_buffer(name, buffer, binding.access_flags)
+        });
+        let writes: Vec<_> = buffers
+            .iter()
+            .map(|buffer| {
+                let buffer = self.buffer(buffer);
+                (buffer.device_address(&self.device), buffer.size)
+            })
+            .collect();
+        self.descriptor_buffer
+            .maybe_duplicate_range(duplicate_descriptor);
+        self.descriptor_buffer
+            .write_buffers(&self.device, &writes, &binding);
+    }
+
+    pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) {
+        self.bind_buffers(name, &[buffer.clone()]);
+    }
+
+    pub fn dispatch(&mut self, width: u32, height: u32) {
+        let bound_shader = self.bound_shader_mut();
+        bound_shader.has_been_dispatched = true;
+
+        let (mut buffers, mut images) = (Vec::new(), Vec::new());
+        let create_access = |access: vk::AccessFlags2| Access {
+            stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
+            access,
+        };
+
+        bound_shader
+            .bound_descriptors
+            .values()
+            .for_each(|resource| match resource.clone() {
+                BoundResource::Buffer(buffer, access) => {
+                    buffers.push((buffer, create_access(access)));
+                }
+                BoundResource::Image(image, access) => {
+                    images.push((image, create_access(access)));
+                }
+            });
+        self.access_resources(&images, &buffers);
+
+        let shader = self.shader(&self.bound_shader().shader);
+        let offset = self.descriptor_buffer.bound_range.start as vk::DeviceSize;
+        unsafe {
+            self.device
+                .descriptor_buffer
+                .cmd_set_descriptor_buffer_offsets(
+                    *self.command_buffer,
+                    vk::PipelineBindPoint::COMPUTE,
+                    shader.layout,
+                    0,
+                    &[0],
+                    &[offset],
+                );
+        }
+        let width = width.div_ceil(shader.block_size.width);
+        let height = height.div_ceil(shader.block_size.height);
+        unsafe {
+            self.device
+                .cmd_dispatch(*self.command_buffer, width, height, 1);
+        }
     }
 }

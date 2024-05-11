@@ -11,3 +11,5 @@ pub enum Error {
     #[error("failed to compile shader: {0}")]
     Compilation(#[from] shaderc::Error),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

@@ -1,12 +1,11 @@
 use ash::vk;
-use std::{mem, ops, slice};
+use std::ops;
 
-use super::device::Device;
+use super::{device::Device, Buffer};
 use crate::error::Error;
 
 pub struct CommandBuffer {
     pub buffer: vk::CommandBuffer,
-    is_recording: bool,
 }
 
 impl ops::Deref for CommandBuffer {
@@ -24,46 +23,27 @@ impl CommandBuffer {
             .command_pool(device.command_pool)
             .command_buffer_count(1);
         let buffers = unsafe { device.allocate_command_buffers(&allocate_info)? };
-        Ok(Self {
-            buffer: buffers[0],
-            is_recording: false,
-        })
+        Ok(Self { buffer: buffers[0] })
     }
 
-    pub fn destroy(&self, device: &Device) {
-        unsafe {
-            device.free_command_buffers(device.command_pool, &[self.buffer]);
-        }
-    }
-
-    pub fn begin(&mut self, device: &Device) -> Result<(), Error> {
-        if mem::replace(&mut self.is_recording, true) {
-            return Ok(());
-        }
-        let begin_info = vk::CommandBufferBeginInfo::default();
+    pub fn begin(&self, device: &Device, descriptor_buffer: &Buffer) -> Result<(), Error> {
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe {
             device
                 .begin_command_buffer(self.buffer, &begin_info)
-                .map_err(Error::from)
+                .map_err(Error::from)?;
+            let binding_infos = [vk::DescriptorBufferBindingInfoEXT::default()
+                .address(descriptor_buffer.device_address(device))
+                .usage(descriptor_buffer.usage_flags)];
+            device
+                .descriptor_buffer
+                .cmd_bind_descriptor_buffers(**self, &binding_infos);
         }
+        Ok(())
     }
 
-    pub fn end(&mut self, device: &Device) -> Result<(), Error> {
-        if !mem::replace(&mut self.is_recording, false) {
-            return Ok(());
-        }
+    pub fn end(&self, device: &Device) -> Result<(), Error> {
         unsafe { device.end_command_buffer(self.buffer).map_err(Error::from) }
-    }
-
-    pub fn full_barrier(&self, device: &Device) {
-        let barrier = vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .src_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE);
-        let dependency_info =
-            vk::DependencyInfo::default().memory_barriers(slice::from_ref(&barrier));
-        unsafe {
-            device.cmd_pipeline_barrier2(self.buffer, &dependency_info);
-        }
     }
 }

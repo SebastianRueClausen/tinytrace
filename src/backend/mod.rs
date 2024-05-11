@@ -1,6 +1,7 @@
 pub mod command;
 pub mod copy;
 mod device;
+mod glsl;
 mod instance;
 pub mod resource;
 mod shader;
@@ -13,17 +14,20 @@ use std::{
     collections::HashMap,
     hash::{self, Hash},
     marker::PhantomData,
-    slice,
+    ops, slice,
 };
 
-use super::error::Error;
+use super::error::{Error, Result};
 use ash::vk;
 use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
 use instance::Instance;
-pub use resource::{Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest};
+pub use resource::{
+    Allocator, Buffer, BufferRequest, Image, ImageRange, ImageRequest, Sampler, SamplerRequest,
+};
 pub use shader::{Binding, BindingType, Shader};
+use shader::{BoundShader, DescriptorBuffer};
 
 /// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,13 +86,13 @@ impl<T> hash::Hash for Handle<T> {
     }
 }
 
-/// A pool of resources. This is meant
 #[derive(Default, Debug)]
 struct Pool {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
     image_views: Vec<vk::ImageView>,
-    pipelines: Vec<Shader>,
+    samplers: Vec<Sampler>,
+    shaders: Vec<Shader>,
     allocator: Allocator,
     epoch: usize,
 }
@@ -100,7 +104,7 @@ impl Pool {
         self.image_views
             .drain(..)
             .for_each(|v| unsafe { device.destroy_image_view(v, None) });
-        self.pipelines.drain(..).for_each(|p| p.destroy(device));
+        self.shaders.drain(..).for_each(|s| s.destroy(device));
         self.allocator.destroy(device);
         self.epoch += 1;
     }
@@ -111,6 +115,8 @@ pub struct Context {
     command_buffer: CommandBuffer,
     device: Device,
     instance: Instance,
+    bound_shader: Option<BoundShader>,
+    descriptor_buffer: DescriptorBuffer,
 }
 
 impl Drop for Context {
@@ -118,22 +124,51 @@ impl Drop for Context {
         for pool in self.pools.values_mut() {
             pool.clear(&self.device);
         }
-        self.command_buffer.destroy(&self.device);
         self.device.destroy();
         self.instance.destroy();
     }
 }
 
+fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<DescriptorBuffer> {
+    let request = BufferRequest {
+        size: 1024 * 1024 * 4,
+        usage_flags: vk::BufferUsageFlags::TRANSFER_DST
+            | vk::BufferUsageFlags::RESOURCE_DESCRIPTOR_BUFFER_EXT
+            | vk::BufferUsageFlags::SAMPLER_DESCRIPTOR_BUFFER_EXT
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+            | vk::MemoryPropertyFlags::HOST_COHERENT,
+    };
+    let buffer = Buffer::new(device, &mut pool.allocator, &request)?;
+    Ok(DescriptorBuffer {
+        data: pool.allocator.map(device, buffer.memory_index)?,
+        buffer: Handle::new(Lifetime::Static, 0, &mut pool.buffers, buffer),
+        bound_range: ops::Range::default(),
+        size: request.size as usize,
+    })
+}
+
 impl Context {
-    pub fn new() -> Result<Self, Error> {
+    pub fn new() -> Result<Self> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
-        Ok(Self {
-            pools: HashMap::default(),
+        let mut static_pool = Pool::default();
+        let descriptor_buffer = create_descriptor_buffer(&device, &mut static_pool)?;
+        let context = Self {
+            pools: [(Lifetime::Static, static_pool)].into_iter().collect(),
             command_buffer: CommandBuffer::new(&device)?,
+            descriptor_buffer,
+            bound_shader: None,
             device,
             instance,
-        })
+        };
+        context.begind_command_buffer()?;
+        Ok(context)
+    }
+
+    fn begind_command_buffer(&self) -> Result<()> {
+        self.command_buffer
+            .begin(&self.device, self.buffer(&self.descriptor_buffer.buffer))
     }
 
     fn check_handle<T>(&self, handle: &Handle<T>) {
@@ -160,6 +195,16 @@ impl Context {
         &self.pools[&handle.lifetime].images[handle.index]
     }
 
+    pub fn shader(&self, handle: &Handle<Shader>) -> &Shader {
+        self.check_handle(handle);
+        &self.pools[&handle.lifetime].shaders[handle.index]
+    }
+
+    pub fn sampler(&self, handle: &Handle<Sampler>) -> &Sampler {
+        self.check_handle(handle);
+        &self.pools[&handle.lifetime].samplers[handle.index]
+    }
+
     fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {
         self.check_handle(handle);
         &mut self.pools.get_mut(&handle.lifetime).unwrap().buffers[handle.index]
@@ -174,7 +219,7 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &BufferRequest,
-    ) -> Result<Handle<Buffer>, Error> {
+    ) -> Result<Handle<Buffer>> {
         let pool = self.pools.entry(lifetime).or_default();
         Buffer::new(&self.device, &mut pool.allocator, request)
             .map(|buffer| Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
@@ -184,13 +229,29 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &ImageRequest,
-    ) -> Result<Handle<Image>, Error> {
+    ) -> Result<Handle<Image>> {
         let pool = self.pools.entry(lifetime).or_default();
         Image::new(&self.device, &mut pool.allocator, request)
             .map(|image| Handle::new(lifetime, pool.epoch, &mut pool.images, image))
     }
 
-    pub fn execute_commands(&mut self) -> Result<(), Error> {
+    pub fn create_sampler(
+        &mut self,
+        lifetime: Lifetime,
+        request: &SamplerRequest,
+    ) -> Result<Handle<Sampler>> {
+        let pool = self.pools.entry(lifetime).or_default();
+        Sampler::new(&self.device, request)
+            .map(|sampler| Handle::new(lifetime, pool.epoch, &mut pool.samplers, sampler))
+    }
+
+    fn get_view(&mut self, image: &Handle<Image>, range: ImageRange) -> Result<vk::ImageView> {
+        resource::create_image_view(&self.device, self.image(image), range).inspect(|view| {
+            self.pool_mut(Lifetime::Frame).image_views.push(*view);
+        })
+    }
+
+    pub fn execute_commands(&mut self) -> Result<()> {
         self.command_buffer.end(&self.device)?;
         let submit_info = vk::SubmitInfo::default()
             .wait_dst_stage_mask(slice::from_ref(&vk::PipelineStageFlags::ALL_COMMANDS))
@@ -198,13 +259,12 @@ impl Context {
             .signal_semaphores(&[])
             .command_buffers(slice::from_ref(&self.command_buffer.buffer));
         unsafe {
-            self.device.queue_submit(
-                self.device.queue,
-                slice::from_ref(&submit_info),
-                vk::Fence::null(),
-            )?;
+            self.device
+                .queue_submit(self.device.queue, &[submit_info], vk::Fence::null())?;
         }
         self.device.wait_until_idle()?;
-        self.device.clear_command_pool()
+        self.device.clear_command_pool()?;
+        self.bound_shader = None;
+        self.begind_command_buffer()
     }
 }

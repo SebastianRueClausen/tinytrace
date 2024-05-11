@@ -16,6 +16,18 @@ impl Access {
             | vk::AccessFlags2::TRANSFER_WRITE;
         write_set.contains(self.access)
     }
+
+    fn image_layout(&self) -> vk::ImageLayout {
+        if self.access.contains(vk::AccessFlags2::TRANSFER_READ) {
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+        } else if self.access.contains(vk::AccessFlags2::TRANSFER_WRITE) {
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        } else if !self.access.contains(vk::AccessFlags2::SHADER_WRITE) {
+            vk::ImageLayout::READ_ONLY_OPTIMAL
+        } else {
+            vk::ImageLayout::GENERAL
+        }
+    }
 }
 
 impl ops::BitOrAssign for Access {
@@ -25,29 +37,16 @@ impl ops::BitOrAssign for Access {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ImageAccess {
-    pub image: Handle<Image>,
-    pub access: Access,
-    pub layout: vk::ImageLayout,
-}
-
-#[derive(Debug, Clone)]
-pub struct BufferAccess {
-    pub buffer: Handle<Buffer>,
-    pub access: Access,
-}
-
 impl Context {
     fn pipeline_barriers(
         &mut self,
-        image_barriers: &[ImageAccess],
-        buffer_barriers: &[BufferAccess],
+        image_barriers: &[(Handle<Image>, Access)],
+        buffer_barriers: &[(Handle<Buffer>, Access)],
     ) {
         let image_barriers: Vec<_> = image_barriers
             .iter()
-            .map(|access| {
-                let image = self.image_mut(&access.image);
+            .map(|(handle, access)| {
+                let image = self.image_mut(handle);
                 let subresource_range = vk::ImageSubresourceRange::default()
                     .aspect_mask(image.aspect)
                     .base_mip_level(0)
@@ -56,31 +55,31 @@ impl Context {
                     .layer_count(1);
                 let barrier = vk::ImageMemoryBarrier2::default()
                     .src_access_mask(image.access.access)
-                    .dst_access_mask(access.access.access)
+                    .dst_access_mask(access.access)
                     .src_stage_mask(image.access.stage)
-                    .dst_stage_mask(access.access.stage)
+                    .dst_stage_mask(access.stage)
                     .old_layout(image.layout)
-                    .new_layout(access.layout)
+                    .new_layout(access.image_layout())
                     .image(**image)
                     .subresource_range(subresource_range);
-                image.access = access.access;
-                image.layout = access.layout;
+                image.access = *access;
+                image.layout = access.image_layout();
                 barrier
             })
             .collect();
         let buffer_barriers: Vec<_> = buffer_barriers
             .iter()
-            .map(|access| {
-                let buffer = self.buffer_mut(&access.buffer);
+            .map(|(handle, access)| {
+                let buffer = self.buffer_mut(handle);
                 let barrier = vk::BufferMemoryBarrier2::default()
                     .src_access_mask(buffer.access.access)
-                    .dst_access_mask(access.access.access)
+                    .dst_access_mask(access.access)
                     .src_stage_mask(buffer.access.stage)
-                    .dst_stage_mask(access.access.stage)
+                    .dst_stage_mask(access.stage)
                     .buffer(**buffer)
                     .offset(0)
                     .size(vk::WHOLE_SIZE);
-                buffer.access = access.access;
+                buffer.access = *access;
                 barrier
             })
             .collect();
@@ -93,28 +92,32 @@ impl Context {
         }
     }
 
-    pub fn access_resources(&mut self, images: &[ImageAccess], buffers: &[BufferAccess]) {
+    pub fn access_resources(
+        &mut self,
+        images: &[(Handle<Image>, Access)],
+        buffers: &[(Handle<Buffer>, Access)],
+    ) {
         let images: Vec<_> = images
             .iter()
-            .filter(|access| {
-                let image = self.image_mut(&access.image);
-                let has_dependency = access.access.writes() || image.access.writes();
-                if !has_dependency || access.layout == image.layout {
-                    image.access |= access.access;
-                    false
-                } else {
-                    true
+            .filter(|(handle, access)| {
+                let image = self.image_mut(handle);
+                let has_dependency = access.writes()
+                    || image.access.writes()
+                    || access.image_layout() != image.layout;
+                if has_dependency {
+                    image.access |= *access;
                 }
+                has_dependency
             })
             .cloned()
             .collect();
         let buffers: Vec<_> = buffers
             .iter()
-            .filter(|access| {
-                let buffer = self.buffer_mut(&access.buffer);
-                let has_dependency = buffer.access.writes() || access.access.writes();
+            .filter(|(handle, access)| {
+                let buffer = self.buffer_mut(handle);
+                let has_dependency = access.writes() || buffer.access.writes();
                 if !has_dependency {
-                    buffer.access |= access.access;
+                    buffer.access |= *access;
                 }
                 has_dependency
             })

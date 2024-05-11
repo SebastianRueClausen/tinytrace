@@ -1,7 +1,5 @@
 use super::{
-    resource,
-    sync::{Access, BufferAccess, ImageAccess},
-    Buffer, BufferRequest, Context, Error, Handle, Image, Lifetime,
+    resource, sync::Access, Buffer, BufferRequest, Context, Error, Handle, Image, Lifetime,
 };
 use ash::vk;
 
@@ -73,16 +71,9 @@ impl Context {
     }
 
     pub fn write_buffers(&mut self, writes: &[BufferWrite]) -> Result<(), Error> {
-        self.command_buffer.begin(&self.device)?;
         let buffer_accesses: Vec<_> = writes
             .iter()
-            .map(|write| BufferAccess {
-                buffer: write.buffer.clone(),
-                access: Access {
-                    stage: vk::PipelineStageFlags2::TRANSFER,
-                    access: vk::AccessFlags2::TRANSFER_WRITE,
-                },
-            })
+            .map(|write| (write.buffer.clone(), WRITE_ACCESS))
             .collect();
         self.access_resources(&[], &buffer_accesses);
 
@@ -119,14 +110,9 @@ impl Context {
     }
 
     pub fn write_images(&mut self, writes: &[ImageWrite]) -> Result<(), Error> {
-        self.command_buffer.begin(&self.device)?;
         let image_accesses: Vec<_> = writes
             .iter()
-            .map(|write| ImageAccess {
-                image: write.image.clone(),
-                layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                access: WRITE_ACCESS,
-            })
+            .map(|write| (write.image.clone(), WRITE_ACCESS))
             .collect();
         self.access_resources(&image_accesses, &[]);
 
@@ -188,21 +174,13 @@ impl Context {
         buffers: &[Handle<Buffer>],
         images: &[Handle<Image>],
     ) -> Result<Download, Error> {
-        self.command_buffer.begin(&self.device)?;
         let image_accesses: Vec<_> = images
             .iter()
-            .map(|image| ImageAccess {
-                image: image.clone(),
-                layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                access: READ_ACCESS,
-            })
+            .map(|image| (image.clone(), READ_ACCESS))
             .collect();
         let buffer_accesses: Vec<_> = buffers
             .iter()
-            .map(|buffer| BufferAccess {
-                buffer: buffer.clone(),
-                access: READ_ACCESS,
-            })
+            .map(|buffer| (buffer.clone(), READ_ACCESS))
             .collect();
         self.access_resources(&image_accesses, &buffer_accesses);
 

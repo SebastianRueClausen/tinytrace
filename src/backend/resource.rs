@@ -4,7 +4,7 @@ use std::ops;
 
 use super::device::Device;
 use super::sync::Access;
-use crate::error::Error;
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy)]
 pub struct BufferRequest {
@@ -48,7 +48,7 @@ impl Buffer {
         device: &Device,
         allocator: &mut Allocator,
         request: &BufferRequest,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         let size = request.size.max(4);
         let buffer_info = vk::BufferCreateInfo::default()
             .size(size)
@@ -119,11 +119,7 @@ impl ops::Deref for Image {
 }
 
 impl Image {
-    pub fn new(
-        device: &Device,
-        allocator: &mut Allocator,
-        request: &ImageRequest,
-    ) -> Result<Self, Error> {
+    pub fn new(device: &Device, allocator: &mut Allocator, request: &ImageRequest) -> Result<Self> {
         let layout = vk::ImageLayout::UNDEFINED;
         let image_info = vk::ImageCreateInfo::default()
             .format(request.format)
@@ -231,7 +227,7 @@ pub fn create_image_view(
     device: &Device,
     image: &Image,
     range: ImageRange,
-) -> Result<vk::ImageView, Error> {
+) -> Result<vk::ImageView> {
     let aspect_mask = format_aspect(image.format);
     let image_view_info = vk::ImageViewCreateInfo::default()
         .image(image.image)
@@ -269,11 +265,7 @@ pub struct MemoryBlock {
 }
 
 impl MemoryBlock {
-    pub fn new(
-        device: &Device,
-        size: vk::DeviceSize,
-        memory_type_index: u32,
-    ) -> Result<Self, Error> {
+    pub fn new(device: &Device, size: vk::DeviceSize, memory_type_index: u32) -> Result<Self> {
         let mut allocate_flags_info =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let allocation_info = vk::MemoryAllocateInfo::default()
@@ -309,7 +301,7 @@ impl MemoryBlock {
         }
     }
 
-    pub fn map(&self, device: &Device) -> Result<*mut u8, Error> {
+    pub fn map(&self, device: &Device) -> Result<*mut u8> {
         let flags = vk::MemoryMapFlags::empty();
         Ok(unsafe { device.map_memory(self.memory, 0, vk::WHOLE_SIZE, flags)? as *mut u8 })
     }
@@ -335,7 +327,7 @@ impl Allocator {
         device: &Device,
         memory_flags: vk::MemoryPropertyFlags,
         requirements: vk::MemoryRequirements,
-    ) -> Result<(vk::DeviceMemory, MemoryIndex), Error> {
+    ) -> Result<(vk::DeviceMemory, MemoryIndex)> {
         let memory_type_index =
             memory_type_index(device, requirements.memory_type_bits, memory_flags);
         let blocks = self.blocks.entry(memory_type_index).or_default();
@@ -373,7 +365,7 @@ impl Allocator {
         Ok(output)
     }
 
-    pub fn map(&mut self, device: &Device, index: MemoryIndex) -> Result<*mut u8, Error> {
+    pub fn map(&mut self, device: &Device, index: MemoryIndex) -> Result<*mut u8> {
         let block = &mut self.blocks.get_mut(&index.memory_type_index).unwrap()[index.block_index];
         let mapping = block.mapping.get_or_insert_with(|| unsafe {
             device
@@ -386,6 +378,56 @@ impl Allocator {
     pub fn destroy(&mut self, device: &Device) {
         for block in self.blocks.drain().flat_map(|(_, blocks)| blocks) {
             block.destroy(device);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SamplerRequest {
+    pub filter: vk::Filter,
+    pub max_anisotropy: Option<f32>,
+    pub address_mode: vk::SamplerAddressMode,
+}
+
+#[derive(Debug)]
+pub struct Sampler {
+    pub sampler: vk::Sampler,
+}
+
+impl ops::Deref for Sampler {
+    type Target = vk::Sampler;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sampler
+    }
+}
+
+impl Sampler {
+    pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self> {
+        let create_info = vk::SamplerCreateInfo::default()
+            .mag_filter(request.filter)
+            .min_filter(request.filter)
+            .address_mode_u(request.address_mode)
+            .address_mode_v(request.address_mode)
+            .address_mode_w(request.address_mode)
+            .max_anisotropy(request.max_anisotropy.unwrap_or_default())
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .unnormalized_coordinates(false)
+            .anisotropy_enable(request.max_anisotropy.is_some())
+            .max_lod(vk::LOD_CLAMP_NONE);
+        let sampler = unsafe {
+            device
+                .create_sampler(&create_info, None)
+                .map_err(Error::from)?
+        };
+        Ok(Self { sampler })
+    }
+
+    pub fn destroy(&self, device: &Device) {
+        unsafe {
+            device.destroy_sampler(self.sampler, None);
         }
     }
 }

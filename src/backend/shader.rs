@@ -407,8 +407,11 @@ impl Context {
         let bind_point = vk::PipelineBindPoint::COMPUTE;
         let pipeline = self.shader(shader);
         unsafe {
-            self.device
-                .cmd_bind_pipeline(*self.command_buffer, bind_point, pipeline.pipeline);
+            self.device.cmd_bind_pipeline(
+                self.command_buffer.buffer,
+                bind_point,
+                pipeline.pipeline,
+            );
         }
         self.descriptor_buffer
             .allocate_range(pipeline.descriptor_size(&self.device));
@@ -487,10 +490,10 @@ impl Context {
 
     fn set_descriptor(&self, offset: u64, layout: vk::PipelineLayout) {
         let point = vk::PipelineBindPoint::COMPUTE;
-        let buffer = &self.command_buffer;
+        let buffer = self.command_buffer.buffer;
         unsafe {
             let loader = &self.device.descriptor_buffer;
-            loader.cmd_set_descriptor_buffer_offsets(**buffer, point, layout, 0, &[0], &[offset]);
+            loader.cmd_set_descriptor_buffer_offsets(buffer, point, layout, 0, &[0], &[offset]);
         }
     }
 
@@ -539,7 +542,7 @@ impl Context {
         let height = height.div_ceil(shader.block_size.height);
         unsafe {
             self.device
-                .cmd_dispatch(*self.command_buffer, width, height, 1);
+                .cmd_dispatch(self.command_buffer.buffer, width, height, 1);
         }
     }
 }

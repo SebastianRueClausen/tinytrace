@@ -153,57 +153,37 @@ impl Context {
             pool.clear(&self.device);
         }
     }
+}
 
-    pub fn buffer(&self, handle: &Handle<Buffer>) -> &Buffer {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].buffers[handle.index]
-    }
+macro_rules! accessor {
+    ($ty:ty, $name:ident, $field:ident) => {
+        pub fn $name(&self, handle: &Handle<$ty>) -> &$ty {
+            self.check_handle(handle);
+            &self.pools[&handle.lifetime].$field[handle.index]
+        }
+    };
+    ($ty:ty, $name:ident, $field:ident, mut) => {
+        pub fn $name(&mut self, handle: &Handle<$ty>) -> &mut $ty {
+            self.check_handle(handle);
+            &mut self.pools.get_mut(&handle.lifetime).unwrap().$field[handle.index]
+        }
+    };
+}
 
-    pub fn image(&self, handle: &Handle<Image>) -> &Image {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].images[handle.index]
-    }
+impl Context {
+    accessor!(Buffer, buffer, buffers);
+    accessor!(Buffer, buffer_mut, buffers, mut);
+    accessor!(Image, image, images);
+    accessor!(Image, image_mut, images, mut);
+    accessor!(Shader, shader, shaders);
+    accessor!(Sampler, sampler, samplers);
+    accessor!(Blas, blas, blases);
+    accessor!(Blas, blas_mut, blases, mut);
+    accessor!(Tlas, tlas, tlases);
+    accessor!(Tlas, tlas_mut, tlases, mut);
+}
 
-    pub fn shader(&self, handle: &Handle<Shader>) -> &Shader {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].shaders[handle.index]
-    }
-
-    pub fn sampler(&self, handle: &Handle<Sampler>) -> &Sampler {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].samplers[handle.index]
-    }
-
-    pub fn blas(&self, handle: &Handle<Blas>) -> &Blas {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].blases[handle.index]
-    }
-
-    pub fn tlas(&self, handle: &Handle<Tlas>) -> &Tlas {
-        self.check_handle(handle);
-        &self.pools[&handle.lifetime].tlases[handle.index]
-    }
-
-    fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {
-        self.check_handle(handle);
-        &mut self.pools.get_mut(&handle.lifetime).unwrap().buffers[handle.index]
-    }
-
-    fn image_mut(&mut self, handle: &Handle<Image>) -> &mut Image {
-        self.check_handle(handle);
-        &mut self.pools.get_mut(&handle.lifetime).unwrap().images[handle.index]
-    }
-
-    pub fn blas_mut(&mut self, handle: &Handle<Blas>) -> &mut Blas {
-        self.check_handle(handle);
-        &mut self.pools.get_mut(&handle.lifetime).unwrap().blases[handle.index]
-    }
-
-    pub fn tlas_mut(&mut self, handle: &Handle<Tlas>) -> &mut Tlas {
-        self.check_handle(handle);
-        &mut self.pools.get_mut(&handle.lifetime).unwrap().tlases[handle.index]
-    }
-
+impl Context {
     pub fn create_buffer(
         &mut self,
         lifetime: Lifetime,

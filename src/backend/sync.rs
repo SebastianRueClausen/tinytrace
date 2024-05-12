@@ -62,7 +62,7 @@ impl Context {
                     .dst_stage_mask(access.stage)
                     .old_layout(image.layout)
                     .new_layout(access.image_layout())
-                    .image(**image)
+                    .image(image.image)
                     .subresource_range(subresource_range);
                 image.access = *access;
                 image.layout = access.image_layout();
@@ -78,7 +78,7 @@ impl Context {
                     .dst_access_mask(access.access)
                     .src_stage_mask(buffer.access.stage)
                     .dst_stage_mask(access.stage)
-                    .buffer(**buffer)
+                    .buffer(buffer.buffer)
                     .offset(0)
                     .size(vk::WHOLE_SIZE);
                 buffer.access = *access;

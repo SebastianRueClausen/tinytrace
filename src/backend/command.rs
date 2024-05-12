@@ -1,19 +1,10 @@
 use ash::vk;
-use std::ops;
 
 use super::{device::Device, Buffer};
 use crate::error::Error;
 
 pub struct CommandBuffer {
     pub buffer: vk::CommandBuffer,
-}
-
-impl ops::Deref for CommandBuffer {
-    type Target = vk::CommandBuffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
 }
 
 impl CommandBuffer {
@@ -38,7 +29,7 @@ impl CommandBuffer {
                 .usage(descriptor_buffer.usage_flags)];
             device
                 .descriptor_buffer
-                .cmd_bind_descriptor_buffers(**self, &binding_infos);
+                .cmd_bind_descriptor_buffers(self.buffer, &binding_infos);
         }
         Ok(())
     }

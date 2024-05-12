@@ -84,9 +84,9 @@ impl Context {
                     .dst_offset(0)
                     .size(byte_count);
                 self.device.cmd_copy_buffer(
-                    *self.command_buffer,
-                    **self.buffer(&scratch),
-                    **self.buffer(&write.buffer),
+                    self.command_buffer.buffer,
+                    self.buffer(&scratch).buffer,
+                    self.buffer(&write.buffer).buffer,
                     &[buffer_copy],
                 );
             }
@@ -139,9 +139,9 @@ impl Context {
                         buffer_image_copy(image.aspect, level, buffer_offset, offset, extent);
                     let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     self.device.cmd_copy_buffer_to_image(
-                        *self.command_buffer,
-                        **self.buffer(&scratch),
-                        **image,
+                        self.command_buffer.buffer,
+                        self.buffer(&scratch).buffer,
+                        image.image,
                         layout,
                         &[image_copy],
                     );
@@ -207,10 +207,10 @@ impl Context {
                 .collect();
             let layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
             self.device.cmd_copy_image_to_buffer(
-                *self.command_buffer,
+                self.command_buffer.buffer,
                 image.image,
                 layout,
-                **self.buffer(&scratch),
+                self.buffer(&scratch).buffer,
                 &copies,
             );
             scratch_offset
@@ -230,9 +230,9 @@ impl Context {
                         .dst_offset(scratch_offset)
                         .size(byte_count);
                     self.device.cmd_copy_buffer(
-                        *self.command_buffer,
-                        **self.buffer(buffer),
-                        **self.buffer(&scratch),
+                        self.command_buffer.buffer,
+                        self.buffer(buffer).buffer,
+                        self.buffer(&scratch).buffer,
                         &[buffer_copy],
                     );
                 }

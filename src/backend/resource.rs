@@ -1,7 +1,6 @@
 use ash::vk;
 use glam::Mat4;
-use std::{array, mem, ops};
-use std::{collections::HashMap, slice};
+use std::{array, collections::HashMap, mem, slice};
 
 use super::device::Device;
 use super::sync::Access;
@@ -58,14 +57,6 @@ pub struct Buffer {
     pub usage_flags: vk::BufferUsageFlags,
 }
 
-impl ops::Deref for Buffer {
-    type Target = vk::Buffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
-}
-
 impl Buffer {
     pub fn new(
         device: &Device,
@@ -94,7 +85,7 @@ impl Buffer {
     }
 
     pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
-        let address_info = vk::BufferDeviceAddressInfo::default().buffer(**self);
+        let address_info = vk::BufferDeviceAddressInfo::default().buffer(self.buffer);
         unsafe { device.get_buffer_device_address(&address_info) }
     }
 
@@ -150,14 +141,6 @@ pub struct Image {
     pub layout: vk::ImageLayout,
     pub access: Access,
     pub usage_flags: vk::ImageUsageFlags,
-}
-
-impl ops::Deref for Image {
-    type Target = vk::Image;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
-    }
 }
 
 impl Image {
@@ -429,14 +412,6 @@ pub struct Sampler {
     pub sampler: vk::Sampler,
 }
 
-impl ops::Deref for Sampler {
-    type Target = vk::Sampler;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sampler
-    }
-}
-
 impl Sampler {
     pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self> {
         let create_info = vk::SamplerCreateInfo::default()
@@ -548,7 +523,7 @@ impl Context {
         let as_info = vk::AccelerationStructureCreateInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
             .size(size_info.acceleration_structure_size)
-            .buffer(**self.buffer(&buffer))
+            .buffer(self.buffer(&buffer).buffer)
             .offset(0);
         let acceleration_structure = unsafe {
             self.device
@@ -679,7 +654,7 @@ impl Context {
             self.device
                 .acceleration_structure
                 .cmd_build_acceleration_structures(
-                    *self.command_buffer,
+                    self.command_buffer.buffer,
                     &build_infos,
                     &range_infos_refs,
                 );
@@ -759,7 +734,7 @@ impl Context {
         )?;
         let as_info = vk::AccelerationStructureCreateInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .buffer(**self.buffer(&buffer))
+            .buffer(self.buffer(&buffer).buffer)
             .size(self.buffer(&buffer).size)
             .offset(0);
         let acceleration_structure = unsafe {
@@ -857,7 +832,7 @@ impl Context {
             self.device
                 .acceleration_structure
                 .cmd_build_acceleration_structures(
-                    *self.command_buffer,
+                    self.command_buffer.buffer,
                     slice::from_ref(&build_info),
                     slice::from_ref(&slice::from_ref(&build_ranges)),
                 );

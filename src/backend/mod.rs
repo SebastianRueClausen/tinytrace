@@ -39,8 +39,8 @@ use device::Device;
 pub use handle::Handle;
 use instance::Instance;
 pub use resource::{
-    Allocator, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
-    SamplerRequest,
+    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
+    SamplerRequest, Tlas,
 };
 pub use shader::{Binding, BindingType, Shader};
 use shader::{BoundShader, DescriptorBuffer};
@@ -60,15 +60,20 @@ struct Pool {
     images: Vec<Image>,
     samplers: Vec<Sampler>,
     shaders: Vec<Shader>,
+    blases: Vec<Blas>,
+    tlases: Vec<Tlas>,
     allocator: Allocator,
     epoch: usize,
 }
 
 impl Pool {
     fn clear(&mut self, device: &Device) {
-        self.buffers.drain(..).for_each(|b| b.destroy(device));
-        self.images.drain(..).for_each(|i| i.destroy(device));
-        self.shaders.drain(..).for_each(|s| s.destroy(device));
+        macro_rules! drain {
+            ($($item:ident), *) => {
+                $(self.$item.drain(..).for_each(|b| b.destroy(device));)*
+            };
+        }
+        drain!(blases, buffers, images, shaders, tlases, blases);
         self.allocator.destroy(device);
         self.epoch += 1;
     }
@@ -169,6 +174,16 @@ impl Context {
         &self.pools[&handle.lifetime].samplers[handle.index]
     }
 
+    pub fn blas(&self, handle: &Handle<Blas>) -> &Blas {
+        self.check_handle(handle);
+        &self.pools[&handle.lifetime].blases[handle.index]
+    }
+
+    pub fn tlas(&self, handle: &Handle<Tlas>) -> &Tlas {
+        self.check_handle(handle);
+        &self.pools[&handle.lifetime].tlases[handle.index]
+    }
+
     fn buffer_mut(&mut self, handle: &Handle<Buffer>) -> &mut Buffer {
         self.check_handle(handle);
         &mut self.pools.get_mut(&handle.lifetime).unwrap().buffers[handle.index]
@@ -177,6 +192,16 @@ impl Context {
     fn image_mut(&mut self, handle: &Handle<Image>) -> &mut Image {
         self.check_handle(handle);
         &mut self.pools.get_mut(&handle.lifetime).unwrap().images[handle.index]
+    }
+
+    pub fn blas_mut(&mut self, handle: &Handle<Blas>) -> &mut Blas {
+        self.check_handle(handle);
+        &mut self.pools.get_mut(&handle.lifetime).unwrap().blases[handle.index]
+    }
+
+    pub fn tlas_mut(&mut self, handle: &Handle<Tlas>) -> &mut Tlas {
+        self.check_handle(handle);
+        &mut self.pools.get_mut(&handle.lifetime).unwrap().tlases[handle.index]
     }
 
     pub fn create_buffer(
@@ -225,5 +250,22 @@ impl Context {
         self.bound_shader = None;
         self.descriptor_buffer.bound_range = 0..0;
         self.begind_command_buffer()
+    }
+
+    fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Handle<Buffer>, *mut u8)> {
+        let pool = self.pools.entry(Lifetime::Frame).or_default();
+        let scratch = Buffer::new(
+            &self.device,
+            &mut pool.allocator,
+            &BufferRequest {
+                ty: BufferType::Scratch,
+                memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                size,
+            },
+        )?;
+        let mapping = pool.allocator.map(&self.device, scratch.memory_index)?;
+        let handle = Handle::new(Lifetime::Frame, pool.epoch, &mut pool.buffers, scratch);
+        Ok((handle, mapping))
     }
 }

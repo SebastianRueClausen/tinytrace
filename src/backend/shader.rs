@@ -526,7 +526,7 @@ impl Context {
                     images.push((image, create_access(access)));
                 }
             });
-        self.access_resources(&images, &buffers);
+        self.access_resources(&images, &buffers, &[], &[]);
 
         let bound_shader = self.bound_shader();
         self.check_all_bindings_are_bound(bound_shader);

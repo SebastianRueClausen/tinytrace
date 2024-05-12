@@ -1,6 +1,4 @@
-use super::{
-    resource, sync::Access, Buffer, BufferRequest, Context, Error, Handle, Image, Lifetime,
-};
+use super::{resource, sync::Access, Buffer, Context, Error, Handle, Image, Lifetime};
 use ash::vk;
 
 use std::collections::HashMap;
@@ -59,28 +57,12 @@ fn buffer_image_copy(
 }
 
 impl Context {
-    fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Buffer, *mut u8), Error> {
-        let pool = self.pools.entry(Lifetime::Frame).or_default();
-        let scratch = Buffer::new(
-            &self.device,
-            &mut pool.allocator,
-            &BufferRequest {
-                ty: super::BufferType::Scratch,
-                memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT,
-                size,
-            },
-        )?;
-        let mapping = pool.allocator.map(&self.device, scratch.memory_index)?;
-        Ok((scratch, mapping))
-    }
-
     pub fn write_buffers(&mut self, writes: &[BufferWrite]) -> Result<(), Error> {
         let buffer_accesses: Vec<_> = writes
             .iter()
             .map(|write| (write.buffer.clone(), WRITE_ACCESS))
             .collect();
-        self.access_resources(&[], &buffer_accesses);
+        self.access_resources(&[], &buffer_accesses, &[], &[]);
 
         // Create and write to scratch.
         let scratch_size: usize = writes
@@ -103,14 +85,13 @@ impl Context {
                     .size(byte_count);
                 self.device.cmd_copy_buffer(
                     *self.command_buffer,
-                    scratch.buffer,
+                    **self.buffer(&scratch),
                     **self.buffer(&write.buffer),
                     &[buffer_copy],
                 );
             }
             offset + byte_count
         });
-        self.pool_mut(Lifetime::Frame).buffers.push(scratch);
         Ok(())
     }
 
@@ -119,7 +100,7 @@ impl Context {
             .iter()
             .map(|write| (write.image.clone(), WRITE_ACCESS))
             .collect();
-        self.access_resources(&image_accesses, &[]);
+        self.access_resources(&image_accesses, &[], &[], &[]);
 
         // Create and write to scratch.
         let scratch_size = writes
@@ -159,7 +140,7 @@ impl Context {
                     let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     self.device.cmd_copy_buffer_to_image(
                         *self.command_buffer,
-                        *scratch,
+                        **self.buffer(&scratch),
                         **image,
                         layout,
                         &[image_copy],
@@ -167,7 +148,6 @@ impl Context {
                     buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as u64
                 },
             );
-        self.pool_mut(Lifetime::Frame).buffers.push(scratch);
         Ok(())
     }
 
@@ -187,7 +167,7 @@ impl Context {
             .iter()
             .map(|buffer| (buffer.clone(), READ_ACCESS))
             .collect();
-        self.access_resources(&image_accesses, &buffer_accesses);
+        self.access_resources(&image_accesses, &buffer_accesses, &[], &[]);
 
         // Figure out scratch size.
         let buffer_scratch_size: vk::DeviceSize = buffers
@@ -230,7 +210,7 @@ impl Context {
                 *self.command_buffer,
                 image.image,
                 layout,
-                *scratch,
+                **self.buffer(&scratch),
                 &copies,
             );
             scratch_offset
@@ -251,15 +231,14 @@ impl Context {
                         .size(byte_count);
                     self.device.cmd_copy_buffer(
                         *self.command_buffer,
-                        self.buffer(buffer).buffer,
-                        scratch.buffer,
+                        **self.buffer(buffer),
+                        **self.buffer(&scratch),
                         &[buffer_copy],
                     );
                 }
                 scratch_offset + byte_count.next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
             });
 
-        self.pool_mut(Lifetime::Frame).buffers.push(scratch);
         self.execute_commands()?;
 
         // Copy data from scratch memory.

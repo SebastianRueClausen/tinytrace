@@ -1,9 +1,9 @@
 use std::ops;
 
-use super::{Buffer, Context, Handle, Image};
+use super::{Blas, Buffer, Context, Handle, Image, Tlas};
 use ash::vk;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Ord)]
 pub struct Access {
     pub stage: vk::PipelineStageFlags2,
     pub access: vk::AccessFlags2,
@@ -13,7 +13,8 @@ impl Access {
     fn writes(&self) -> bool {
         let write_set = vk::AccessFlags2::MEMORY_WRITE
             | vk::AccessFlags2::SHADER_STORAGE_WRITE
-            | vk::AccessFlags2::TRANSFER_WRITE;
+            | vk::AccessFlags2::TRANSFER_WRITE
+            | vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR;
         write_set.intersects(self.access)
     }
 
@@ -42,6 +43,7 @@ impl Context {
         &mut self,
         image_barriers: &[(Handle<Image>, Access)],
         buffer_barriers: &[(Handle<Buffer>, Access)],
+        memory_barriers: &[(Access, Access)],
     ) {
         let image_barriers: Vec<_> = image_barriers
             .iter()
@@ -83,9 +85,20 @@ impl Context {
                 barrier
             })
             .collect();
+        let memory_barriers: Vec<_> = memory_barriers
+            .iter()
+            .map(|(src, dst)| {
+                vk::MemoryBarrier2::default()
+                    .src_access_mask(src.access)
+                    .dst_access_mask(dst.access)
+                    .src_stage_mask(src.stage)
+                    .dst_stage_mask(dst.stage)
+            })
+            .collect();
         let dependency_info = vk::DependencyInfo::default()
             .image_memory_barriers(&image_barriers)
-            .buffer_memory_barriers(&buffer_barriers);
+            .buffer_memory_barriers(&buffer_barriers)
+            .memory_barriers(&memory_barriers);
         unsafe {
             self.device
                 .cmd_pipeline_barrier2(self.command_buffer.buffer, &dependency_info);
@@ -96,6 +109,8 @@ impl Context {
         &mut self,
         images: &[(Handle<Image>, Access)],
         buffers: &[(Handle<Buffer>, Access)],
+        blases: &[(Handle<Blas>, Access)],
+        tlases: &[(Handle<Tlas>, Access)],
     ) {
         let images: Vec<_> = images
             .iter()
@@ -123,6 +138,25 @@ impl Context {
             })
             .cloned()
             .collect();
-        self.pipeline_barriers(&images, &buffers);
+        let structure_access = |structure: &mut Access, access: Access| {
+            let has_dependency = structure.writes() || access.writes();
+            if has_dependency {
+                *structure = Access::default();
+            }
+            *structure |= access;
+            has_dependency.then_some((access, *structure))
+        };
+        let mut memory: Vec<_> = blases
+            .iter()
+            .filter_map(|(handle, access)| {
+                structure_access(&mut self.blas_mut(handle).access, *access)
+            })
+            .collect();
+        memory.extend(tlases.iter().filter_map(|(handle, access)| {
+            structure_access(&mut self.tlas_mut(handle).access, *access)
+        }));
+        memory.sort();
+        memory.dedup();
+        self.pipeline_barriers(&images, &buffers, &memory);
     }
 }

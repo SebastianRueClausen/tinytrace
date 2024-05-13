@@ -29,7 +29,7 @@ macro_rules! read_file {
 
 #[test]
 fn allocate_large_buffers() {
-    let mut context = Context::new().unwrap();
+    let mut context = Context::new(None).unwrap();
     for _ in 0..2 {
         let _ = context
             .create_buffer(

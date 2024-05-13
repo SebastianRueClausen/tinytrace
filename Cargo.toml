@@ -13,6 +13,7 @@ ash = "0.38.0"
 thiserror = "1.0.59"
 shaderc = "0.8.3"
 bytemuck = { version = "1.15.0", features = ["derive"] }
+raw-window-handle = "0.6.1"
 
 [dev-dependencies]
 smallpt = "0.4.2"

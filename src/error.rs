@@ -10,6 +10,8 @@ pub enum Error {
     NoDevice,
     #[error("failed to compile shader: {0}")]
     Compilation(#[from] shaderc::Error),
+    #[error("no suitable surface found")]
+    NoSuitableSurface,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

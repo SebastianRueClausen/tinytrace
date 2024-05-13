@@ -5,7 +5,7 @@ use crate::backend::*;
 
 #[test]
 fn transfer() {
-    let mut context = Context::new().unwrap();
+    let mut context = Context::new(None).unwrap();
     let buffer = create_test_buffer(&mut context);
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
@@ -45,7 +45,7 @@ fn transfer() {
 
 #[test]
 fn transfer_image_mips() {
-    let mut context = Context::new().unwrap();
+    let mut context = Context::new(None).unwrap();
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
         .create_image(

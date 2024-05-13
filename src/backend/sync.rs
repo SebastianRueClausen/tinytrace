@@ -1,6 +1,6 @@
 use std::ops;
 
-use super::{Blas, Buffer, Context, Handle, Image, Tlas};
+use super::{Blas, Buffer, Context, Device, Error, Handle, Image, Result, Tlas};
 use ash::vk;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Ord)]
@@ -158,5 +158,37 @@ impl Context {
         memory.sort();
         memory.dedup();
         self.pipeline_barriers(&images, &buffers, &memory);
+    }
+}
+
+pub struct Semaphores {
+    pub acquire: vk::Semaphore,
+    pub release: vk::Semaphore,
+    pub image_acquired: bool,
+}
+
+impl Semaphores {
+    pub fn new(device: &Device) -> Result<Self> {
+        Ok(Self {
+            acquire: create_semaphore(device)?,
+            release: create_semaphore(device)?,
+            image_acquired: false,
+        })
+    }
+
+    pub fn destroy(&self, device: &Device) {
+        unsafe {
+            device.destroy_semaphore(self.acquire, None);
+            device.destroy_semaphore(self.release, None);
+        }
+    }
+}
+
+fn create_semaphore(device: &Device) -> Result<vk::Semaphore> {
+    let semaphore_info = vk::SemaphoreCreateInfo::default();
+    unsafe {
+        device
+            .create_semaphore(&semaphore_info, None)
+            .map_err(Error::from)
     }
 }

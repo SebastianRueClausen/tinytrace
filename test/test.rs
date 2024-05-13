@@ -119,7 +119,7 @@ fn cornell_box() {
         &mut num_rays,
     );
 
-    let renderer = tinytrace::Renderer::new().unwrap();
+    let renderer = tinytrace::Renderer::new(None).unwrap();
     let test = renderer.render(width, height);
 
     let error = mean_squared_error(&correct, &test);

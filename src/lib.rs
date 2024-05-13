@@ -3,18 +3,22 @@
 pub mod backend;
 mod error;
 
+use ash::vk;
 use backend::Context;
 use error::Error;
 use glam::Vec3;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 pub struct Renderer {
     pub context: Context,
 }
 
 impl Renderer {
-    pub fn new() -> Result<Self, Error> {
+    pub fn new(
+        window: Option<(RawWindowHandle, RawDisplayHandle, vk::Extent2D)>,
+    ) -> Result<Self, Error> {
         Ok(Self {
-            context: Context::new()?,
+            context: Context::new(window)?,
         })
     }
 

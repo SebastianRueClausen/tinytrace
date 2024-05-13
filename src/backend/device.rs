@@ -7,7 +7,9 @@ use ash::{ext, khr, vk};
 
 pub struct Device {
     pub device: ash::Device,
+    pub physical_device: vk::PhysicalDevice,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub queue_family_index: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub descriptor_buffer: ext::descriptor_buffer::Device,
@@ -89,7 +91,9 @@ impl Device {
             acceleration_structure: khr::acceleration_structure::Device::new(instance, &device),
             descriptor_buffer: ext::descriptor_buffer::Device::new(instance, &device),
             descriptor_buffer_properties,
+            queue_family_index,
             memory_properties,
+            physical_device,
             command_pool,
             queue,
             device,

@@ -137,7 +137,7 @@ pub struct Image {
     pub format: vk::Format,
     pub aspect: vk::ImageAspectFlags,
     pub mip_level_count: u32,
-    pub swapchain: bool,
+    pub swapchain_index: Option<u32>,
     pub layout: vk::ImageLayout,
     pub access: Access,
     pub usage_flags: vk::ImageUsageFlags,
@@ -172,7 +172,7 @@ impl Image {
             format: request.format,
             mip_level_count: request.mip_level_count,
             layout: vk::ImageLayout::UNDEFINED,
-            swapchain: false,
+            swapchain_index: None,
             usage_flags,
             image,
         })
@@ -196,7 +196,7 @@ impl Image {
     }
 
     pub fn destroy(&self, device: &Device) {
-        if !self.swapchain {
+        if self.swapchain_index.is_none() {
             unsafe {
                 device.destroy_image(self.image, None);
             }

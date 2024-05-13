@@ -1,4 +1,4 @@
-//! # The backend tinytrace.
+//! # The backend tinytrace
 //!
 //! The Vulkan backend of tinytrace. It is written to both have a simple implementation and be
 //! simple to use. It makes a few compromises to make this possible:
@@ -23,13 +23,17 @@ mod handle;
 mod instance;
 pub mod resource;
 mod shader;
+mod surface;
 mod sync;
 
 #[cfg(test)]
 mod test;
 
 use std::collections::HashMap;
-use std::{ops, slice};
+use std::slice;
+
+use self::surface::Swapchain;
+use self::sync::Semaphores;
 
 use super::error::{Error, Result};
 use ash::vk;
@@ -38,6 +42,7 @@ pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
 pub use handle::Handle;
 use instance::Instance;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 pub use resource::{
     Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
     SamplerRequest, Tlas,
@@ -72,7 +77,7 @@ impl Pool {
                 $(self.$item.drain(..).for_each(|b| b.destroy(device));)*
             };
         }
-        drain!(tlases, blases, buffers, images, shaders);
+        drain!(tlases, blases, samplers, buffers, images, shaders);
         self.allocator.destroy(device);
         self.epoch += 1;
     }
@@ -86,12 +91,18 @@ pub struct Context {
     instance: Instance,
     bound_shader: Option<BoundShader>,
     descriptor_buffer: DescriptorBuffer,
+    semaphores: Semaphores,
+    swapchain: Option<(Swapchain, Vec<Handle<Image>>)>,
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
         for pool in self.pools.values_mut() {
             pool.clear(&self.device);
+        }
+        self.semaphores.destroy(&self.device);
+        if let Some((swaphchain, _)) = &self.swapchain {
+            swaphchain.destroy(&self.device);
         }
         self.device.destroy();
         self.instance.destroy();
@@ -105,28 +116,43 @@ fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<Descript
         memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     };
+
     let buffer = Buffer::new(device, &mut pool.allocator, &request)?;
+
     Ok(DescriptorBuffer {
         data: pool.allocator.map(device, buffer.memory_index)?,
         buffer: Handle::new(Lifetime::Static, 0, &mut pool.buffers, buffer),
-        bound_range: ops::Range::default(),
+        bound_range: 0..0,
         size: request.size as usize,
     })
 }
 
 impl Context {
-    pub fn new() -> Result<Self> {
+    pub fn new(window: Option<(RawWindowHandle, RawDisplayHandle, vk::Extent2D)>) -> Result<Self> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
 
-        let mut static_pool = Pool::default();
+        let (mut static_pool, mut surface_pool) = (Pool::default(), Pool::default());
         let descriptor_buffer = create_descriptor_buffer(&device, &mut static_pool)?;
+
+        let swapchain = if let Some((window, display, extent)) = window {
+            let (swapchain, images) = Swapchain::new(&instance, &device, window, display, extent)?;
+            let images = images
+                .into_iter()
+                .map(|image| Handle::new(Lifetime::Surface, 0, &mut surface_pool.images, image))
+                .collect();
+            Some((swapchain, images))
+        } else {
+            None
+        };
 
         let context = Self {
             pools: HashMap::from([(Lifetime::Static, static_pool)]),
             command_buffer: CommandBuffer::new(&device)?,
+            semaphores: Semaphores::new(&device)?,
             descriptor_buffer,
             bound_shader: None,
+            swapchain,
             device,
             instance,
         };
@@ -216,20 +242,42 @@ impl Context {
 
     pub fn execute_commands(&mut self) -> Result<()> {
         self.command_buffer.end(&self.device)?;
+        let wait = self
+            .semaphores
+            .image_acquired
+            .then_some(self.semaphores.acquire);
         let submit_info = vk::SubmitInfo::default()
             .wait_dst_stage_mask(slice::from_ref(&vk::PipelineStageFlags::ALL_COMMANDS))
-            .wait_semaphores(&[])
-            .signal_semaphores(&[])
-            .command_buffers(slice::from_ref(&self.command_buffer.buffer));
+            .command_buffers(slice::from_ref(&self.command_buffer.buffer))
+            .signal_semaphores(slice::from_ref(&self.semaphores.release))
+            .wait_semaphores(wait.as_slice());
         unsafe {
             self.device
                 .queue_submit(self.device.queue, &[submit_info], vk::Fence::null())?;
         }
         self.device.wait_until_idle()?;
         self.device.clear_command_pool()?;
+
         self.bound_shader = None;
         self.descriptor_buffer.bound_range = 0..0;
+
         self.begind_command_buffer()
+    }
+
+    pub fn swapchain_image(&mut self) -> Result<Handle<Image>> {
+        let (swapchain, images) = self.swapchain.as_ref().expect("no swapchain");
+        swapchain
+            .image_index(&mut self.semaphores)
+            .map(|index| images[index as usize].clone())
+    }
+
+    pub fn present(&mut self, image: &Handle<Image>) -> Result<()> {
+        let (swapchain, _) = self.swapchain.as_ref().expect("no swapchain");
+        let image_index = self
+            .image(image)
+            .swapchain_index
+            .expect("image is not swapchain image");
+        swapchain.present(&self.device, &self.semaphores, image_index)
     }
 
     fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Handle<Buffer>, *mut u8)> {

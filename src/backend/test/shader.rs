@@ -4,7 +4,7 @@ use crate::{backend::*, read_file};
 
 #[test]
 fn compute_shader() {
-    let mut context = Context::new().unwrap();
+    let mut context = Context::new(None).unwrap();
     let mut create_storage_buffer = || {
         context
             .create_buffer(

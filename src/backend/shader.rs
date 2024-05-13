@@ -94,6 +94,7 @@ fn create_shader_module(
     source: &str,
     vk::Extent2D { width, height }: vk::Extent2D,
     bindings: &[Binding],
+    includes: &[&str],
 ) -> Result<vk::ShaderModule> {
     let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
@@ -105,7 +106,7 @@ fn create_shader_module(
                 content,
             })
     });
-    let source = render_shader(width, height, source, bindings);
+    let source = render_shader(width, height, source, bindings, includes);
     let shader_kind = shaderc::ShaderKind::Compute;
     let output = compiler
         .compile_into_spirv(&source, shader_kind, "shader", "main", Some(&options))
@@ -349,8 +350,9 @@ impl Context {
         source: &str,
         block_size: vk::Extent2D,
         bindings: &[Binding],
+        includes: &[&str],
     ) -> Result<Handle<Shader>> {
-        let module = create_shader_module(&self.device, source, block_size, bindings)?;
+        let module = create_shader_module(&self.device, source, block_size, bindings, includes)?;
         let descriptor_layout = create_descriptor_layout(&self.device, bindings)?;
         let pipeline_layout = create_pipeline_layout(&self.device, descriptor_layout)?;
         let stage_info = vk::PipelineShaderStageCreateInfo::default()

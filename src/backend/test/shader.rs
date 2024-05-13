@@ -51,7 +51,9 @@ fn compute_shader() {
         },
     ];
     let grid_size = vk::Extent2D::default().width(256).height(1);
-    let shader = context.create_shader(source, grid_size, &bindings).unwrap();
+    let shader = context
+        .create_shader(source, grid_size, &bindings, &[])
+        .unwrap();
 
     context.bind_shader(&shader);
 

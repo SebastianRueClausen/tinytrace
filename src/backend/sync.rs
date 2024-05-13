@@ -164,6 +164,7 @@ impl Context {
 pub struct Semaphores {
     pub acquire: vk::Semaphore,
     pub release: vk::Semaphore,
+    /// If a swapchain image was acquired, we have to wait for it.
     pub image_acquired: bool,
 }
 

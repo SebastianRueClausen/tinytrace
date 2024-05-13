@@ -45,7 +45,6 @@ pub use resource::{
 pub use shader::{Binding, BindingType, Shader};
 use shader::{BoundShader, DescriptorBuffer};
 
-/// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifetime {
     Static,
@@ -73,7 +72,7 @@ impl Pool {
                 $(self.$item.drain(..).for_each(|b| b.destroy(device));)*
             };
         }
-        drain!(blases, buffers, images, shaders, tlases, blases);
+        drain!(tlases, blases, buffers, images, shaders);
         self.allocator.destroy(device);
         self.epoch += 1;
     }
@@ -81,6 +80,7 @@ impl Pool {
 
 pub struct Context {
     pools: HashMap<Lifetime, Pool>,
+    /// The only command buffer used. It is always recording.
     command_buffer: CommandBuffer,
     device: Device,
     instance: Instance,
@@ -148,7 +148,7 @@ impl Context {
         self.pools.entry(lifetime).or_default()
     }
 
-    fn clear_pool(&mut self, lifetime: Lifetime) {
+    pub fn advance_lifetime(&mut self, lifetime: Lifetime) {
         if let Some(pool) = self.pools.get_mut(&lifetime) {
             pool.clear(&self.device);
         }

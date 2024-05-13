@@ -1,5 +1,5 @@
 use crate::error::Error;
-use std::ops::Deref;
+use std::ops;
 use std::slice;
 
 use super::instance::Instance;
@@ -7,15 +7,20 @@ use ash::{ext, khr, vk};
 
 pub struct Device {
     pub device: ash::Device,
-    pub physical_device: vk::PhysicalDevice,
-    pub queue_family_index: u32,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub descriptor_buffer: ext::descriptor_buffer::Device,
     pub acceleration_structure: khr::acceleration_structure::Device,
-    pub limits: vk::PhysicalDeviceLimits,
     pub descriptor_buffer_properties: vk::PhysicalDeviceDescriptorBufferPropertiesEXT<'static>,
+}
+
+impl ops::Deref for Device {
+    type Target = ash::Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.device
+    }
 }
 
 impl Device {
@@ -23,8 +28,6 @@ impl Device {
         let (physical_device, queue_family_index) = select_physical_device(instance)?;
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
-        let limits = properties.limits;
         let queue_info = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index)
             .queue_priorities(&[1.0]);
@@ -80,21 +83,16 @@ impl Device {
                 .queue_family_index(queue_family_index);
             device.create_command_pool(&info, None)?
         };
-        let descriptor_buffer = ext::descriptor_buffer::Device::new(instance, &device);
-        let acceleration_structure = khr::acceleration_structure::Device::new(instance, &device);
         let descriptor_buffer_properties =
             get_descriptor_buffer_properties(instance, physical_device);
         Ok(Self {
-            device,
-            physical_device,
-            queue_family_index,
+            acceleration_structure: khr::acceleration_structure::Device::new(instance, &device),
+            descriptor_buffer: ext::descriptor_buffer::Device::new(instance, &device),
+            descriptor_buffer_properties,
             memory_properties,
             command_pool,
             queue,
-            descriptor_buffer,
-            acceleration_structure,
-            descriptor_buffer_properties,
-            limits,
+            device,
         })
     }
 
@@ -104,11 +102,9 @@ impl Device {
 
     pub fn clear_command_pool(&self) -> Result<(), Error> {
         unsafe {
+            let flags = vk::CommandPoolResetFlags::RELEASE_RESOURCES;
             self.device
-                .reset_command_pool(
-                    self.command_pool,
-                    vk::CommandPoolResetFlags::RELEASE_RESOURCES,
-                )
+                .reset_command_pool(self.command_pool, flags)
                 .map_err(Error::from)
         }
     }
@@ -118,14 +114,6 @@ impl Device {
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
         }
-    }
-}
-
-impl Deref for Device {
-    type Target = ash::Device;
-
-    fn deref(&self) -> &Self::Target {
-        &self.device
     }
 }
 
@@ -162,11 +150,11 @@ fn select_physical_device(instance: &Instance) -> Result<(vk::PhysicalDevice, u3
     let (mut fallback, mut preferred) = (None, None);
     unsafe {
         for physical_device in instance.enumerate_physical_devices()? {
-            let properties = instance.get_physical_device_properties(physical_device);
             let Some(queue_index) = get_graphics_queue_family_index(instance, physical_device)
             else {
                 continue;
             };
+            let properties = instance.get_physical_device_properties(physical_device);
             if properties.api_version < vk::make_api_version(0, 1, 3, 0) {
                 continue;
             }

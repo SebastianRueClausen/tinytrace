@@ -1,5 +1,5 @@
 use std::ffi::{self, CStr, CString};
-use std::ops::Deref;
+use std::ops;
 
 use crate::error::Error;
 use ash::{ext, khr, vk};
@@ -11,7 +11,7 @@ pub struct Instance {
     pub debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
-impl Deref for Instance {
+impl ops::Deref for Instance {
     type Target = ash::Instance;
 
     fn deref(&self) -> &Self::Target {

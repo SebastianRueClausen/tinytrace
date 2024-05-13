@@ -56,14 +56,16 @@ fn compute_shader() {
     context.bind_shader(&shader);
 
     // `a` to `b`.
-    context.bind_buffer("src", &a);
-    context.bind_buffer("dst", &b);
-    context.dispatch(256, 1);
+    context
+        .bind_buffer("src", &a)
+        .bind_buffer("dst", &b)
+        .dispatch(256, 1);
 
     // `b` to `c`.
-    context.bind_buffer("src", &b);
-    context.bind_buffer("dst", &c);
-    context.dispatch(256, 1);
+    context
+        .bind_buffer("src", &b)
+        .bind_buffer("dst", &c)
+        .dispatch(256, 1);
 
     let download = context.download(&[c.clone()], &[]).unwrap();
     assert_eq!(data, download.buffers[&c]);

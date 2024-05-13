@@ -24,21 +24,19 @@ fn transfer() {
     let image_data: Box<[u8]> = (0..extent.width * extent.height * 4)
         .map(|value| (value % 255) as u8)
         .collect();
-    context
+    let download = context
         .write_buffers(&[BufferWrite {
             buffer: buffer.clone(),
             data: &buffer_data,
         }])
-        .unwrap();
-    context
+        .unwrap()
         .write_images(&[ImageWrite {
             image: image.clone(),
             offset: vk::Offset3D::default(),
             extent,
             mips: &[image_data.clone()],
         }])
-        .unwrap();
-    let download = context
+        .unwrap()
         .download(&[buffer.clone()], &[image.clone()])
         .unwrap();
     assert_eq!(download.buffers[&buffer], buffer_data);
@@ -67,15 +65,16 @@ fn transfer_image_mips() {
             .map(|_| 1u8)
             .collect(),
     ];
-    context
+    let download = context
         .write_images(&[ImageWrite {
             image: image.clone(),
             offset: vk::Offset3D::default(),
             extent,
             mips: &mips.clone(),
         }])
+        .unwrap()
+        .download(&[], &[image.clone()])
         .unwrap();
-    let download = context.download(&[], &[image.clone()]).unwrap();
     // Check that the mips are packed tightly.
     assert_eq!(download.images[&image][..mips[0].len()], *mips[0]);
     assert_eq!(download.images[&image][mips[0].len()..], *mips[1]);

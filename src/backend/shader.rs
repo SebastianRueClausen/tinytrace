@@ -398,7 +398,7 @@ impl Context {
         ))
     }
 
-    pub fn bind_shader(&mut self, shader: &Handle<Shader>) {
+    pub fn bind_shader(&mut self, shader: &Handle<Shader>) -> &mut Self {
         self.bound_shader = Some(BoundShader {
             bound: HashMap::default(),
             shader: shader.clone(),
@@ -415,6 +415,7 @@ impl Context {
         }
         self.descriptor_buffer
             .allocate_range(pipeline.descriptor_size(&self.device));
+        self
     }
 
     fn bound_shader(&self) -> &BoundShader {
@@ -436,7 +437,7 @@ impl Context {
         name: &'static str,
         sampler: Option<&Handle<Sampler>>,
         images: &[Handle<Image>],
-    ) {
+    ) -> &mut Self {
         let binding = *self.binding(name);
         let bound_shader = self.bound_shader_mut();
         let duplicate_descriptor = images.iter().fold(false, |duplicate, image| {
@@ -448,10 +449,16 @@ impl Context {
         let sampler = sampler.map(|sampler| self.sampler(sampler).sampler);
         self.descriptor_buffer
             .write_images(&self.device, &image_views, sampler, &binding);
+        self
     }
 
-    pub fn bind_storage_images(&mut self, name: &'static str, images: &[Handle<Image>]) {
+    pub fn bind_storage_images(
+        &mut self,
+        name: &'static str,
+        images: &[Handle<Image>],
+    ) -> &mut Self {
         self.bind_images(name, None, images);
+        self
     }
 
     pub fn bind_sampled_images(
@@ -459,12 +466,12 @@ impl Context {
         name: &'static str,
         sampler: &Handle<Sampler>,
         images: &[Handle<Image>],
-    ) {
-        self.bind_images(name, Some(sampler), images);
+    ) -> &mut Self {
+        self.bind_images(name, Some(sampler), images)
     }
 
-    pub fn bind_storage_image(&mut self, name: &'static str, image: &Handle<Image>) {
-        self.bind_storage_images(name, &[image.clone()]);
+    pub fn bind_storage_image(&mut self, name: &'static str, image: &Handle<Image>) -> &mut Self {
+        self.bind_storage_images(name, &[image.clone()])
     }
 
     pub fn bind_sampled_image(
@@ -476,7 +483,7 @@ impl Context {
         self.bind_sampled_images(name, sampler, &[image.clone()]);
     }
 
-    pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) {
+    pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) -> &mut Self {
         let binding = *self.binding(name);
         let bound_shader = self.bound_shader_mut();
         let duplicate_descriptor = bound_shader.bind_buffer(name, buffer, binding.access_flags);
@@ -486,6 +493,7 @@ impl Context {
             .maybe_duplicate_range(duplicate_descriptor);
         self.descriptor_buffer
             .write_buffer(&self.device, address, size, &binding);
+        self
     }
 
     fn set_descriptor(&self, offset: u64, layout: vk::PipelineLayout) {
@@ -508,7 +516,7 @@ impl Context {
     }
 
     /// Dispatch bound shader with `width` * `height` threads.
-    pub fn dispatch(&mut self, width: u32, height: u32) {
+    pub fn dispatch(&mut self, width: u32, height: u32) -> &mut Self {
         let bound_shader = self.bound_shader_mut();
         bound_shader.has_been_dispatched = true;
 
@@ -544,5 +552,7 @@ impl Context {
             self.device
                 .cmd_dispatch(self.command_buffer.buffer, width, height, 1);
         }
+
+        self
     }
 }

@@ -334,6 +334,7 @@ pub struct MemoryIndex {
 
 const DEFAULT_BLOCK_SIZE: vk::DeviceSize = 1024 * 1024 * 20;
 
+/// A linear block allocator.
 #[derive(Default, Debug)]
 pub struct Allocator {
     blocks: HashMap<u32, Vec<MemoryBlock>>,
@@ -568,9 +569,9 @@ pub struct BlasBuild {
 }
 
 impl Context {
-    pub fn build_blases(&mut self, builds: &[BlasBuild]) -> Result<()> {
+    pub fn build_blases(&mut self, builds: &[BlasBuild]) -> Result<&mut Self> {
         if builds.is_empty() {
-            return Ok(());
+            return Ok(self);
         }
         let scratch_buffers: Vec<Handle<Buffer>> = builds
             .iter()
@@ -659,7 +660,7 @@ impl Context {
                     &range_infos_refs,
                 );
         }
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -779,7 +780,7 @@ impl Context {
         tlas: &Handle<Tlas>,
         mode: vk::BuildAccelerationStructureModeKHR,
         instances: &[TlasInstance],
-    ) -> Result<()> {
+    ) -> Result<&mut Self> {
         let instances: Vec<_> = instances
             .iter()
             .map(|instance| {
@@ -837,7 +838,7 @@ impl Context {
                     slice::from_ref(&slice::from_ref(&build_ranges)),
                 );
         }
-        Ok(())
+        Ok(self)
     }
 }
 

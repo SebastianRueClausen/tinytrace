@@ -29,7 +29,6 @@ const WRITE_ACCESS: Access = Access {
     stage: vk::PipelineStageFlags2::TRANSFER,
     access: vk::AccessFlags2::TRANSFER_WRITE,
 };
-
 const READ_ACCESS: Access = Access {
     stage: vk::PipelineStageFlags2::TRANSFER,
     access: vk::AccessFlags2::TRANSFER_READ,
@@ -57,7 +56,7 @@ fn buffer_image_copy(
 }
 
 impl Context {
-    pub fn write_buffers(&mut self, writes: &[BufferWrite]) -> Result<(), Error> {
+    pub fn write_buffers(&mut self, writes: &[BufferWrite]) -> Result<&mut Self, Error> {
         let buffer_accesses: Vec<_> = writes
             .iter()
             .map(|write| (write.buffer.clone(), WRITE_ACCESS))
@@ -92,10 +91,10 @@ impl Context {
             }
             offset + byte_count
         });
-        Ok(())
+        Ok(self)
     }
 
-    pub fn write_images(&mut self, writes: &[ImageWrite]) -> Result<(), Error> {
+    pub fn write_images(&mut self, writes: &[ImageWrite]) -> Result<&mut Self, Error> {
         let image_accesses: Vec<_> = writes
             .iter()
             .map(|write| (write.image.clone(), WRITE_ACCESS))
@@ -148,12 +147,12 @@ impl Context {
                     buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as u64
                 },
             );
-        Ok(())
+        Ok(self)
     }
 
     /// Download data from buffers and images.
     ///
-    /// The memory of images with multiple mips is densely packed.
+    /// The memory of images with multiple mips is densely packed. Note that this ends the frame.
     pub fn download(
         &mut self,
         buffers: &[Handle<Buffer>],
@@ -263,7 +262,7 @@ impl Context {
             })
             .collect();
 
-        self.clear_pool(Lifetime::Frame);
+        self.advance_lifetime(Lifetime::Frame);
         Ok(Download { buffers, images })
     }
 }

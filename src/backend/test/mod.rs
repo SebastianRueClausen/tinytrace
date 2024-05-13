@@ -26,3 +26,20 @@ macro_rules! read_file {
         ))
     };
 }
+
+#[test]
+fn allocate_large_buffers() {
+    let mut context = Context::new().unwrap();
+    for _ in 0..2 {
+        let _ = context
+            .create_buffer(
+                Lifetime::Frame,
+                &BufferRequest {
+                    size: 1024 * 1024 * 100,
+                    ty: BufferType::Storage,
+                    memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                },
+            )
+            .unwrap();
+    }
+}

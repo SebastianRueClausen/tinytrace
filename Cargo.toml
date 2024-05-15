@@ -8,12 +8,17 @@ name = "integration"
 path = "test/test.rs"
 
 [dependencies]
-glam = "0.23.0"
+glam = { version = "0.23.0", features = ["bytemuck"] }
 ash = "0.38.0"
 thiserror = "1.0.59"
 shaderc = "0.8.3"
 bytemuck = { version = "1.15.0", features = ["derive"] }
 raw-window-handle = "0.6.1"
+half = "2.4.1"
+gltf = { version = "1.4.1", features = ["KHR_materials_ior", "KHR_materials_emissive_strength"] }
+image = "0.25.1"
+mikktspace = "0.3.0"
+texpresso = "2.0.1"
 
 [dev-dependencies]
 smallpt = "0.4.2"

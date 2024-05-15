@@ -1,7 +1,8 @@
 #![warn(clippy::all)]
 
 pub mod backend;
-mod error;
+pub mod error;
+pub mod scene;
 
 use ash::vk;
 use backend::Context;

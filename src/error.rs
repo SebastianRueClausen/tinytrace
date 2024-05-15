@@ -1,4 +1,5 @@
 use ash::vk;
+use std::io;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -12,6 +13,8 @@ pub enum Error {
     Compilation(#[from] shaderc::Error),
     #[error("no suitable surface found")]
     NoSuitableSurface,
+    #[error("failed to read scene: {0}")]
+    Io(#[from] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

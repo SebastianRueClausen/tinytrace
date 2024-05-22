@@ -38,45 +38,52 @@ impl Device {
             khr::swapchain::NAME.as_ptr(),
             khr::deferred_host_operations::NAME.as_ptr(),
             khr::acceleration_structure::NAME.as_ptr(),
-            khr::ray_tracing_pipeline::NAME.as_ptr(),
+            khr::ray_query::NAME.as_ptr(),
+            khr::ray_tracing_position_fetch::NAME.as_ptr(),
+            khr::spirv_1_4::NAME.as_ptr(),
         ];
         let mut features = vk::PhysicalDeviceFeatures2::default().features({
             vk::PhysicalDeviceFeatures::default()
-                .multi_draw_indirect(true)
                 .pipeline_statistics_query(true)
                 .sampler_anisotropy(true)
                 .shader_int16(true)
-                .shader_int64(true)
         });
-        let mut features_1_1 = vk::PhysicalDeviceVulkan11Features::default()
+        let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::default()
             .storage_buffer16_bit_access(true)
             .uniform_and_storage_buffer16_bit_access(true)
             .shader_draw_parameters(true);
-        let mut features_1_2 = vk::PhysicalDeviceVulkan12Features::default()
+        let mut vulkan_1_2_features = vk::PhysicalDeviceVulkan12Features::default()
             .buffer_device_address(true)
             .descriptor_binding_variable_descriptor_count(true)
             .runtime_descriptor_array(true)
             .shader_float16(true)
             .scalar_block_layout(true);
-        let mut features_1_3 = vk::PhysicalDeviceVulkan13Features::default()
-            .dynamic_rendering(true)
+        let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
             .synchronization2(true)
             .maintenance4(true);
-        let mut features_descriptor_buffer =
+        let mut descriptor_buffer_features =
             vk::PhysicalDeviceDescriptorBufferFeaturesEXT::default()
                 .descriptor_buffer(true)
                 .descriptor_buffer_image_layout_ignored(true);
-        let mut features_acc_struct = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
-            .acceleration_structure(true);
+        let mut acceleration_structure_features =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+                .acceleration_structure(true);
+        let mut ray_query_features =
+            vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
+        let mut position_fetch_features =
+            vk::PhysicalDeviceRayTracingPositionFetchFeaturesKHR::default()
+                .ray_tracing_position_fetch(true);
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(slice::from_ref(&queue_info))
             .enabled_extension_names(&extensions)
             .push_next(&mut features)
-            .push_next(&mut features_1_1)
-            .push_next(&mut features_1_2)
-            .push_next(&mut features_1_3)
-            .push_next(&mut features_descriptor_buffer)
-            .push_next(&mut features_acc_struct);
+            .push_next(&mut vulkan_1_1_features)
+            .push_next(&mut vulkan_1_2_features)
+            .push_next(&mut vulkan_1_3_features)
+            .push_next(&mut descriptor_buffer_features)
+            .push_next(&mut acceleration_structure_features)
+            .push_next(&mut ray_query_features)
+            .push_next(&mut position_fetch_features);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
         let command_pool = unsafe {
@@ -163,6 +170,7 @@ fn select_physical_device(instance: &Instance) -> Result<(vk::PhysicalDevice, u3
                 continue;
             }
             if properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
+                println!("{:?}", properties.device_name_as_c_str());
                 preferred.get_or_insert((physical_device, queue_index));
             }
             fallback.get_or_insert((physical_device, queue_index));

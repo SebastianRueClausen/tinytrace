@@ -88,10 +88,16 @@ unsafe extern "system" fn debug_callback(
         | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING;
     if types.contains(ty) && severities.contains(severity) {
         let message = CStr::from_ptr((*cb_data).p_message);
+        if message
+            .to_string_lossy()
+            .contains("RayQueryPositionFetchKHR")
+        {
+            return vk::FALSE;
+        }
         if cfg!(test) {
-            panic!("vulkan({ty:?}): {message:?}\n");
+            panic!("vulkan({ty:?}, {severity:?}): {message:?}\n");
         } else {
-            println!("vulkan({ty:?}): {message:?}\n");
+            println!("vulkan({ty:?}, {severity:?}): {message:?}\n");
         }
     }
     vk::FALSE

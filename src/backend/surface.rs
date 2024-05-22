@@ -12,6 +12,7 @@ pub struct Swapchain {
     swapchain_loader: khr::swapchain::Device,
     surface: vk::SurfaceKHR,
     swapchain: vk::SwapchainKHR,
+    pub format: vk::Format,
 }
 
 impl Swapchain {
@@ -87,6 +88,7 @@ impl Swapchain {
             surface,
             swapchain_loader,
             swapchain,
+            format,
         };
         Ok((swapchain, images))
     }

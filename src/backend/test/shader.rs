@@ -1,18 +1,20 @@
 use ash::vk;
 
-use crate::{backend::*, read_file};
+use crate::backend::*;
 
 #[test]
 fn compute_shader() {
-    let mut context = Context::new(None).unwrap();
+    let render_size = vk::Extent2D::default().width(1024).height(1024);
+    let mut context = Context::new(None, render_size).unwrap();
+
     let mut create_storage_buffer = || {
         context
             .create_buffer(
                 Lifetime::Static,
                 &BufferRequest {
-                    size: 256,
+                    memory_location: MemoryLocation::Device,
                     ty: BufferType::Storage,
-                    memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    size: 256,
                 },
             )
             .unwrap()
@@ -31,8 +33,7 @@ fn compute_shader() {
         }])
         .unwrap();
 
-    let source = read_file!("copy_buffer.glsl");
-    let bindings = [
+    let bindings = &[
         Binding {
             name: "src",
             ty: BindingType::StorageBuffer {
@@ -50,9 +51,16 @@ fn compute_shader() {
             },
         },
     ];
-    let grid_size = vk::Extent2D::default().width(256).height(1);
     let shader = context
-        .create_shader(source, grid_size, &bindings, &[])
+        .create_shader(
+            Lifetime::Static,
+            &ShaderRequest {
+                block_size: vk::Extent2D::default().width(256).height(1),
+                source: include_str!("copy_buffer.glsl"),
+                bindings,
+                includes: &[],
+            },
+        )
         .unwrap();
 
     context.bind_shader(&shader);

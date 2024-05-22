@@ -3,22 +3,22 @@ name = "tinytrace"
 version = "0.1.0"
 edition = "2021"
 
-[[test]]
-name = "integration"
-path = "test/test.rs"
-
 [dependencies]
-glam = { version = "0.23.0", features = ["bytemuck"] }
+glam = { version = "0.27.0", features = ["bytemuck"] }
 ash = "0.38.0"
 thiserror = "1.0.59"
 shaderc = "0.8.3"
-bytemuck = { version = "1.15.0", features = ["derive"] }
+bytemuck = { version = "1.15.0", features = ["derive", "extern_crate_std"] }
 raw-window-handle = "0.6.1"
-half = "2.4.1"
+half = { version = "2.4.1", features = ["bytemuck"] }
 gltf = { version = "1.4.1", features = ["KHR_materials_ior", "KHR_materials_emissive_strength"] }
 image = "0.25.1"
 mikktspace = "0.3.0"
-texpresso = "2.0.1"
+texpresso = { version = "2.0.1", features = ["rayon"] }
 
 [dev-dependencies]
-smallpt = "0.4.2"
+winit = { version = "0.30.0", features = ["rwh_06"] }
+bit-set = "0.5.3"
+
+[[example]]
+name = "render"

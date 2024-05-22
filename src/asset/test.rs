@@ -3,7 +3,7 @@ use std::{f32::consts::TAU, path::PathBuf};
 use glam::{Vec2, Vec2Swizzles, Vec3, Vec4};
 
 use super::{Scene, TangentFrame};
-use crate::scene::normal::orthonormal;
+use crate::asset::normal::orthonormal;
 
 #[test]
 fn load_cornell_box() {

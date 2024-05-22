@@ -9,35 +9,25 @@ fn create_test_buffer(context: &mut Context) -> Handle<Buffer> {
             Lifetime::Frame,
             &BufferRequest {
                 ty: BufferType::Uniform,
-                memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                memory_location: MemoryLocation::Device,
                 size: 256,
             },
         )
         .unwrap()
 }
 
-#[macro_export]
-macro_rules! read_file {
-    ($fname:expr) => {
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/backend/test/",
-            $fname
-        ))
-    };
-}
-
 #[test]
 fn allocate_large_buffers() {
-    let mut context = Context::new(None).unwrap();
+    let render_size = vk::Extent2D::default().width(1024).height(1024);
+    let mut context = Context::new(None, render_size).unwrap();
     for _ in 0..2 {
         let _ = context
             .create_buffer(
                 Lifetime::Frame,
                 &BufferRequest {
+                    memory_location: MemoryLocation::Device,
                     size: 1024 * 1024 * 100,
                     ty: BufferType::Storage,
-                    memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 },
             )
             .unwrap();

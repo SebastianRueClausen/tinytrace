@@ -89,6 +89,14 @@ pub fn quantize_unorm(v: f32, n: i32) -> i32 {
     (v * scale + 0.5f32) as i32
 }
 
+pub fn quantize_snorm(mut v: f32, n: i32) -> i32 {
+    let scale = ((1 << (n - 1)) - 1) as f32;
+    let round = if v >= 0.0 { 0.5 } else { -0.5 };
+    v = if v >= -1.0 { v } else { -1.0 };
+    v = if v <= 1.0 { v } else { 1.0 };
+    (v * scale + round) as i32
+}
+
 pub fn dequantize_unorm(value: u32, n: u32) -> f32 {
     value as f32 / ((1_i32 << n) - 1) as f32
 }

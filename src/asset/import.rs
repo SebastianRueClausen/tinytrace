@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{fs, io, mem};
 
-use crate::scene::normal::TangentFrame;
+use crate::asset::normal::TangentFrame;
 
 use super::{
     normal, BoundingSphere, Instance, Material, Mesh, Model, Scene, Texture, TextureKind, Vertex,
@@ -236,6 +236,7 @@ fn load_mesh(
         .index()
         .map(|material| material as u32)
         .unwrap_or_else(|| fallback_material(scene, fallback));
+
     let accessor = primitive.get(&gltf::Semantic::Positions).unwrap();
     verify_accessor("positions", &accessor, DataType::F32, Dimensions::Vec3);
     let positions = read_from_accessor::<Vec3>(data, &accessor);
@@ -262,22 +263,38 @@ fn load_mesh(
         }
     };
     let bounding_sphere = bounding_sphere(&primitive);
-    let vertices: Vec<_> = texcoords
+    let vertices = texcoords
         .iter()
         .cloned()
-        .zip(normals.iter().cloned())
-        .zip(tangents.iter().cloned())
+        .zip(normals.iter())
+        .zip(tangents.iter())
         .map(|((texcoord, normal), tangent)| Vertex {
-            tangent_frame: TangentFrame::new(normal, tangent),
+            tangent_frame: TangentFrame::new(*normal, *tangent),
             texcoord: texcoord.to_array().map(f16::from_f32),
-        })
-        .collect();
-    let vertex_offset = scene.vertices.len();
+        });
+    let positions = positions.iter().flat_map(|position| {
+        let position = (*position - bounding_sphere.center) / bounding_sphere.radius;
+        debug_assert!(position.max_element() <= 1.0);
+        position
+            .to_array()
+            .map(|value| normal::quantize_snorm(value, 16) as i16)
+    });
+
+    let vertex_offset = scene.vertices.len() as u32;
+    let vertex_count = vertices.len() as u32;
     scene.vertices.extend(vertices);
+    scene.positions.extend(positions);
+
+    let index_offset = scene.indices.len() as u32;
+    let index_count = indices.len() as u32;
+    scene.indices.extend(indices);
+
     Mesh {
-        vertex_offset: vertex_offset as u32,
-        vertex_count: texcoords.len() as u32,
+        vertex_count,
+        index_count,
         bounding_sphere,
+        vertex_offset,
+        index_offset,
         material,
     }
 }
@@ -318,8 +335,7 @@ pub fn load_scene(data: &Data) -> Result<Scene, gltf::Error> {
 
 fn bounding_sphere(primitive: &gltf::Primitive) -> BoundingSphere {
     let bounding_box = primitive.bounding_box();
-    let min = Vec3::from(bounding_box.min);
-    let max = Vec3::from(bounding_box.max);
+    let [min, max] = [bounding_box.min, bounding_box.max].map(Vec3::from);
     let center = min + (max - min) * 0.5;
     BoundingSphere {
         radius: (center - max).length(),
@@ -392,7 +408,7 @@ fn compress_bytes(kind: TextureKind, width: u32, height: u32, bytes: &[u8]) -> V
         TextureKind::Normal | TextureKind::Specular => texpresso::Format::Bc5,
     };
     let params = texpresso::Params {
-        algorithm: texpresso::Algorithm::ClusterFit,
+        algorithm: texpresso::Algorithm::RangeFit,
         ..Default::default()
     };
     let (width, height) = (width as usize, height as usize);

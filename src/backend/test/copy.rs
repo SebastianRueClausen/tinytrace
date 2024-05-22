@@ -5,18 +5,18 @@ use crate::backend::*;
 
 #[test]
 fn transfer() {
-    let mut context = Context::new(None).unwrap();
+    let render_size = vk::Extent2D::default().width(1024).height(1024);
+    let mut context = Context::new(None, render_size).unwrap();
     let buffer = create_test_buffer(&mut context);
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                ty: ImageType::Texture,
-                memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                memory_location: MemoryLocation::Device,
                 mip_level_count: 1,
+                extent,
             },
         )
         .unwrap();
@@ -45,17 +45,17 @@ fn transfer() {
 
 #[test]
 fn transfer_image_mips() {
-    let mut context = Context::new(None).unwrap();
+    let render_size = vk::Extent2D::default().width(1024).height(1024);
+    let mut context = Context::new(None, render_size).unwrap();
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                extent,
                 format: vk::Format::R8G8B8A8_SRGB,
-                ty: ImageType::Texture,
-                memory_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                memory_location: MemoryLocation::Device,
                 mip_level_count: 2,
+                extent,
             },
         )
         .unwrap();

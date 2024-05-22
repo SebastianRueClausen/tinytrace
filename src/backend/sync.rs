@@ -18,15 +18,15 @@ impl Access {
         write_set.intersects(self.access)
     }
 
+    // Determine the image layout based on the access flags.
+    // Assume that no flags means presenting the image, which is a bit of a hack.
     fn image_layout(&self) -> vk::ImageLayout {
-        if self.access.contains(vk::AccessFlags2::TRANSFER_READ) {
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL
-        } else if self.access.contains(vk::AccessFlags2::TRANSFER_WRITE) {
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL
-        } else if !self.access.contains(vk::AccessFlags2::SHADER_WRITE) {
-            vk::ImageLayout::READ_ONLY_OPTIMAL
-        } else {
-            vk::ImageLayout::GENERAL
+        match self.access {
+            vk::AccessFlags2::TRANSFER_READ => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::AccessFlags2::TRANSFER_WRITE => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::AccessFlags2::SHADER_READ => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            _ if self.access.is_empty() => vk::ImageLayout::PRESENT_SRC_KHR,
+            _ => vk::ImageLayout::GENERAL,
         }
     }
 }
@@ -116,9 +116,9 @@ impl Context {
             .iter()
             .filter(|(handle, access)| {
                 let image = self.image_mut(handle);
-                let has_dependency = access.writes()
-                    || image.access.writes()
-                    || access.image_layout() != image.layout;
+                let has_write_dependency =
+                    (access.writes() || image.access.writes()) && !image.access.access.is_empty();
+                let has_dependency = has_write_dependency || access.image_layout() != image.layout;
                 if has_dependency {
                     image.access |= *access;
                 }
@@ -130,7 +130,8 @@ impl Context {
             .iter()
             .filter(|(handle, access)| {
                 let buffer = self.buffer_mut(handle);
-                let has_dependency = access.writes() || buffer.access.writes();
+                let has_dependency =
+                    (access.writes() || buffer.access.writes()) && !buffer.access.access.is_empty();
                 if !has_dependency {
                     buffer.access |= *access;
                 }
@@ -139,7 +140,8 @@ impl Context {
             .cloned()
             .collect();
         let structure_access = |structure: &mut Access, access: Access| {
-            let has_dependency = structure.writes() || access.writes();
+            let has_dependency =
+                (structure.writes() || access.writes()) && !structure.access.is_empty();
             if has_dependency {
                 *structure = Access::default();
             }
@@ -166,6 +168,7 @@ pub struct Semaphores {
     pub release: vk::Semaphore,
     /// If a swapchain image was acquired, we have to wait for it.
     pub image_acquired: bool,
+    pub image_released: bool,
 }
 
 impl Semaphores {
@@ -174,6 +177,7 @@ impl Semaphores {
             acquire: create_semaphore(device)?,
             release: create_semaphore(device)?,
             image_acquired: false,
+            image_released: true,
         })
     }
 

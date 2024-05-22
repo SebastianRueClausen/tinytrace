@@ -32,8 +32,8 @@ mod test;
 use std::collections::HashMap;
 use std::slice;
 
-use self::surface::Swapchain;
 use self::sync::Semaphores;
+use self::{surface::Swapchain, sync::Access};
 
 use super::error::{Error, Result};
 use ash::vk;
@@ -44,10 +44,10 @@ pub use handle::Handle;
 use instance::Instance;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 pub use resource::{
-    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, ImageType, Sampler,
-    SamplerRequest, Tlas,
+    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, MemoryLocation,
+    Sampler, SamplerRequest, Tlas,
 };
-pub use shader::{Binding, BindingType, Shader};
+pub use shader::{Binding, BindingType, Shader, ShaderRequest};
 use shader::{BoundShader, DescriptorBuffer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,6 +93,7 @@ pub struct Context {
     descriptor_buffer: DescriptorBuffer,
     semaphores: Semaphores,
     swapchain: Option<(Swapchain, Vec<Handle<Image>>)>,
+    includes: HashMap<&'static str, String>,
 }
 
 impl Drop for Context {
@@ -113,8 +114,7 @@ fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<Descript
     let request = BufferRequest {
         size: 1024 * 1024 * 4,
         ty: BufferType::Descriptor,
-        memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-            | vk::MemoryPropertyFlags::HOST_COHERENT,
+        memory_location: MemoryLocation::Host,
     };
 
     let buffer = Buffer::new(device, &mut pool.allocator, &request)?;
@@ -128,14 +128,17 @@ fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<Descript
 }
 
 impl Context {
-    pub fn new(window: Option<(RawWindowHandle, RawDisplayHandle, vk::Extent2D)>) -> Result<Self> {
+    pub fn new(
+        window: Option<(RawWindowHandle, RawDisplayHandle)>,
+        extent: vk::Extent2D,
+    ) -> Result<Self> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
 
         let (mut static_pool, mut surface_pool) = (Pool::default(), Pool::default());
         let descriptor_buffer = create_descriptor_buffer(&device, &mut static_pool)?;
 
-        let swapchain = if let Some((window, display, extent)) = window {
+        let swapchain = if let Some((window, display)) = window {
             let (swapchain, images) = Swapchain::new(&instance, &device, window, display, extent)?;
             let images = images
                 .into_iter()
@@ -147,9 +150,13 @@ impl Context {
         };
 
         let context = Self {
-            pools: HashMap::from([(Lifetime::Static, static_pool)]),
+            pools: HashMap::from([
+                (Lifetime::Static, static_pool),
+                (Lifetime::Surface, surface_pool),
+            ]),
             command_buffer: CommandBuffer::new(&device)?,
             semaphores: Semaphores::new(&device)?,
+            includes: HashMap::default(),
             descriptor_buffer,
             bound_shader: None,
             swapchain,
@@ -174,10 +181,13 @@ impl Context {
         self.pools.entry(lifetime).or_default()
     }
 
-    pub fn advance_lifetime(&mut self, lifetime: Lifetime) {
+    pub fn advance_lifetime(&mut self, lifetime: Lifetime) -> Result<()> {
+        // TODO: Maybe check of commands have been recorded before doing this.
+        self.execute_commands()?;
         if let Some(pool) = self.pools.get_mut(&lifetime) {
             pool.clear(&self.device);
         }
+        Ok(())
     }
 }
 
@@ -210,24 +220,13 @@ impl Context {
 }
 
 impl Context {
-    pub fn create_buffer(
-        &mut self,
-        lifetime: Lifetime,
-        request: &BufferRequest,
-    ) -> Result<Handle<Buffer>> {
-        let pool = self.pools.entry(lifetime).or_default();
-        Buffer::new(&self.device, &mut pool.allocator, request)
-            .map(|buffer| Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
+    pub fn surface_format(&self) -> vk::Format {
+        let (swapchain, _) = self.swapchain.as_ref().expect("no swapchain");
+        swapchain.format
     }
 
-    pub fn create_image(
-        &mut self,
-        lifetime: Lifetime,
-        request: &ImageRequest,
-    ) -> Result<Handle<Image>> {
-        let pool = self.pools.entry(lifetime).or_default();
-        Image::new(&self.device, &mut pool.allocator, request)
-            .map(|image| Handle::new(lifetime, pool.epoch, &mut pool.images, image))
+    pub fn add_include(&mut self, name: &'static str, source: String) {
+        self.includes.insert(name, source);
     }
 
     pub fn create_sampler(
@@ -246,33 +245,53 @@ impl Context {
             .semaphores
             .image_acquired
             .then_some(self.semaphores.acquire);
+        let signal = (!self.semaphores.image_released).then_some(self.semaphores.release);
         let submit_info = vk::SubmitInfo::default()
             .wait_dst_stage_mask(slice::from_ref(&vk::PipelineStageFlags::ALL_COMMANDS))
             .command_buffers(slice::from_ref(&self.command_buffer.buffer))
-            .signal_semaphores(slice::from_ref(&self.semaphores.release))
+            .signal_semaphores(signal.as_slice())
             .wait_semaphores(wait.as_slice());
         unsafe {
             self.device
                 .queue_submit(self.device.queue, &[submit_info], vk::Fence::null())?;
         }
+
         self.device.wait_until_idle()?;
         self.device.clear_command_pool()?;
 
         self.bound_shader = None;
         self.descriptor_buffer.bound_range = 0..0;
 
+        for pool in self.pools.values_mut() {
+            for buffer in &mut pool.buffers {
+                buffer.access = Access::default();
+            }
+            for image in &mut pool.images {
+                image.access = Access::default();
+            }
+        }
+
         self.begind_command_buffer()
     }
 
     pub fn swapchain_image(&mut self) -> Result<Handle<Image>> {
         let (swapchain, images) = self.swapchain.as_ref().expect("no swapchain");
+        self.semaphores.image_acquired = true;
         swapchain
             .image_index(&mut self.semaphores)
             .map(|index| images[index as usize].clone())
     }
 
     pub fn present(&mut self, image: &Handle<Image>) -> Result<()> {
+        let access = Access {
+            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            access: vk::AccessFlags2::empty(),
+        };
+        self.access_resources(&[(image.clone(), access)], &[], &[], &[]);
+        self.execute_commands()?;
+
         let (swapchain, _) = self.swapchain.as_ref().expect("no swapchain");
+        self.semaphores.image_acquired = false;
         let image_index = self
             .image(image)
             .swapchain_index
@@ -286,9 +305,8 @@ impl Context {
             &self.device,
             &mut pool.allocator,
             &BufferRequest {
+                memory_location: MemoryLocation::Host,
                 ty: BufferType::Scratch,
-                memory_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT,
                 size,
             },
         )?;

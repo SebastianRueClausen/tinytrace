@@ -1,3 +1,5 @@
+use ash::vk;
+
 use super::{Binding, BindingType};
 use std::fmt::Write;
 
@@ -5,15 +7,20 @@ const PRELUDE: &str = r#"
 #version 460
 #extension GL_GOOGLE_include_directive: require
 #extension GL_EXT_nonuniform_qualifier: require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16: require
+#extension GL_EXT_shader_16bit_storage: require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16: require
+#extension GL_EXT_ray_query: require
+#extension GL_EXT_ray_tracing_position_fetch: require
 "#;
 
 fn render_binding(name: &str, ty: &BindingType, index: u32) -> String {
-    let classifier = |writes| if writes { "" } else { "readonly " };
+    let classifier = |writes| if writes { "" } else { "readonly" };
     match ty {
         BindingType::StorageBuffer { ty, array, writes } => {
             let classifier = classifier(*writes);
             let brackets = if *array { "[]" } else { "" };
-            format!("{classifier}buffer Binding{index} {{ {ty} {name}{brackets}; }};")
+            format!("{classifier} buffer Binding{index} {{ {ty} {name}{brackets}; }};")
         }
         BindingType::UniformBuffer { ty } => {
             format!("uniform Binding{index} {{ {ty} {name}; }};")
@@ -22,13 +29,25 @@ fn render_binding(name: &str, ty: &BindingType, index: u32) -> String {
             format!("uniform accelerationStructureEXT {name};")
         }
         BindingType::SampledImage { count } => {
-            let brackets = if *count > 1 { "[]" } else { "" };
-            format!("uniform sampled2D {name}{};", brackets)
+            let brackets = if count.is_some() { "[]" } else { "" };
+            format!("uniform sampler2D {name}{brackets};")
         }
-        BindingType::StorageImage { count, writes } => {
-            let brackets = if *count > 1 { "[]" } else { "" };
+        BindingType::StorageImage { count, writes, .. } => {
+            let brackets = if count.is_some() { "[]" } else { "" };
             format!("{} uniform image2D {name}{brackets};", classifier(*writes))
         }
+    }
+}
+
+fn binding_format_specifier(ty: &BindingType) -> &'static str {
+    if let BindingType::StorageImage { format, .. } = ty {
+        match *format {
+            vk::Format::R32G32B32A32_SFLOAT => ", rgba32f",
+            vk::Format::B8G8R8A8_UNORM | vk::Format::R8G8B8A8_UNORM => ", rgba8",
+            _ => panic!("invalid format"),
+        }
+    } else {
+        ""
     }
 }
 
@@ -46,15 +65,20 @@ pub fn render_shader(
     )
     .unwrap();
     let glsl = includes.iter().fold(glsl, |mut glsl, include| {
-        writeln!(&mut glsl, "#include\"{include}\"").unwrap();
+        writeln!(&mut glsl, "#include \"{include}\"").unwrap();
         glsl
     });
     let mut glsl = bindings
         .iter()
         .enumerate()
         .fold(glsl, |mut glsl, (index, binding)| {
+            let format_specifier = binding_format_specifier(&binding.ty);
             let binding = render_binding(binding.name, &binding.ty, index as u32);
-            writeln!(&mut glsl, "layout (set = 0, binding = {index}) {binding}").unwrap();
+            writeln!(
+                &mut glsl,
+                "layout (set = 0, binding = {index}{format_specifier}) {binding}"
+            )
+            .unwrap();
             glsl
         });
     write!(&mut glsl, "{source}").unwrap();

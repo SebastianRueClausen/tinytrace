@@ -64,28 +64,7 @@ impl Context {
         request: &BufferRequest,
     ) -> Result<Handle<Buffer>> {
         let pool = self.pools.entry(lifetime).or_default();
-        let size = request.size.max(4);
-        let usage_flags = request.ty.usage_flags();
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(usage_flags);
-        let buffer = unsafe { self.device.create_buffer(&buffer_info, None)? };
-        let memory_requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
-        let memory_flags = request.memory_location.memory_property_flags();
-        let (memory, memory_index) =
-            pool.allocator
-                .allocate(&self.device, memory_flags, memory_requirements)?;
-        unsafe {
-            self.device
-                .bind_buffer_memory(buffer, memory, memory_index.offset)?;
-        }
-        let buffer = Buffer {
-            access: Access::default(),
-            usage_flags,
-            size,
-            buffer,
-            memory_index,
-        };
+        let buffer = Buffer::new(&self.device, &mut pool.allocator, request)?;
         Ok(Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
     }
 }

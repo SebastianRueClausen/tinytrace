@@ -16,7 +16,7 @@ impl Camera {
     pub const UP: Vec3 = Vec3::Y;
 
     pub fn new(surface_size: Vec2) -> Self {
-        let position = Vec3::new(-0.284, 1.1, 1.0);
+        let position = Vec3::ZERO;
         let forward = Vec3::X;
         let yaw = 0.0;
         let pitch = 0.0;

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::{fs, io, mem};
+use std::{array, fs, io, mem};
 
 use crate::asset::normal::TangentFrame;
 
@@ -96,61 +96,37 @@ impl Data {
     }
 }
 
-fn load_texture(
-    data: &Data,
-    scene: &mut Scene,
-    fallback: &mut Fallback,
-    specs: &TextureSpecs,
-    accessor: Option<gltf::Texture>,
-    transform: fn(&mut [u8]),
-) -> Result<u16, gltf::Error> {
-    if let Some(accessor) = accessor {
-        let image = data.image(accessor.source().source())?;
-        Ok(scene.add_texture(create_texture(image, specs, true, transform)))
-    } else {
-        Ok(fallback.insert(scene, specs))
-    }
-}
-
-fn normal_transform(pixel: &mut [u8]) {
-    let convert = |index| (pixel[index] as f32) / 255.0;
-    let normal = Vec3::new(convert(0), convert(1), convert(2)) * 2.0 - 1.0;
-    let uv = normal::encode_octahedron(normal);
-    pixel[0] = normal::quantize_unorm(uv.x, 8) as u8;
-    pixel[1] = normal::quantize_unorm(uv.y, 8) as u8;
-}
-
-fn specular_transform(pixel: &mut [u8]) {
-    pixel[0] = pixel[2];
-}
-
 fn load_material(
     data: &Data,
     scene: &mut Scene,
     fallback: &mut Fallback,
     material: gltf::Material,
 ) -> Result<Material, gltf::Error> {
-    let mut load = |specs, accessor, transform| {
-        load_texture(data, scene, fallback, specs, accessor, transform)
+    let mut load = |specs, accessor: Option<gltf::Texture>, transform: fn(&mut [u8])| {
+        Ok::<u16, gltf::Error>(if let Some(accessor) = accessor {
+            let image = data.image(accessor.source().source())?;
+            scene.add_texture(create_texture(image, specs, true, transform))
+        } else {
+            fallback.insert(scene, specs)
+        })
     };
     let accessor = material.pbr_metallic_roughness().base_color_texture();
     let albedo = load(&ALBEDO_SPECS, accessor.map(|i| i.texture()), |_| ())?;
     let accessor = material.emissive_texture();
     let emissive = load(&EMISSIVE_SPECS, accessor.map(|i| i.texture()), |_| ())?;
     let accessor = material.normal_texture();
-    let normal = load(
-        &NORMAL_SPECS,
-        accessor.map(|i| i.texture()),
-        normal_transform,
-    )?;
+    let normal = load(&NORMAL_SPECS, accessor.map(|i| i.texture()), |pixel| {
+        let normal = Vec3::from_array(array::from_fn(|index| pixel[index] as f32 / 255.0));
+        let uv = normal::encode_octahedron(normal * 2.0 - 1.0);
+        pixel[0] = normal::quantize_unorm(uv.x, 8) as u8;
+        pixel[1] = normal::quantize_unorm(uv.y, 8) as u8;
+    })?;
     let accessor = material
         .pbr_metallic_roughness()
         .metallic_roughness_texture();
-    let specular = load(
-        &SPECULAR_SPECS,
-        accessor.map(|i| i.texture()),
-        specular_transform,
-    )?;
+    let specular = load(&SPECULAR_SPECS, accessor.map(|i| i.texture()), |pixel| {
+        pixel[0] = pixel[2]
+    })?;
     let base_emissive =
         Vec3::from_array(material.emissive_factor()) * material.emissive_strength().unwrap_or(1.0);
     let base_color = material
@@ -224,6 +200,19 @@ fn read_from_accessor<T: AnyBitPattern>(data: &Data, accessor: &gltf::Accessor) 
         .collect()
 }
 
+fn vertex_colors<T: AnyBitPattern>(
+    data: &Data,
+    accessor: &gltf::Accessor,
+    decode: fn(&T) -> f16,
+) -> Vec<f16> {
+    read_from_accessor::<T>(data, accessor)
+        .windows(accessor.dimensions().multiplicity())
+        .flat_map(|items| {
+            array::from_fn::<_, 4, _>(|index| items.get(index).map(decode).unwrap_or(f16::ONE))
+        })
+        .collect()
+}
+
 fn load_mesh(
     data: &Data,
     scene: &mut Scene,
@@ -240,7 +229,9 @@ fn load_mesh(
     let accessor = primitive.get(&gltf::Semantic::Positions).unwrap();
     verify_accessor("positions", &accessor, DataType::F32, Dimensions::Vec3);
     let positions = read_from_accessor::<Vec3>(data, &accessor);
+
     let indices = load_indices(data, &primitive, positions.len() as u32).unwrap();
+
     let normals = match primitive.get(&gltf::Semantic::Normals) {
         None => generate_normals(&positions, &indices),
         Some(accessor) => {
@@ -248,6 +239,7 @@ fn load_mesh(
             read_from_accessor(data, &accessor)
         }
     };
+
     let texcoords = match primitive.get(&gltf::Semantic::TexCoords(0)) {
         None => vec![Vec2::ZERO; normals.len()],
         Some(accessor) => {
@@ -255,6 +247,7 @@ fn load_mesh(
             read_from_accessor(data, &accessor)
         }
     };
+
     let tangents = match primitive.get(&gltf::Semantic::Tangents) {
         None => generate_tangents(&positions, &texcoords, &normals, &indices),
         Some(accessor) => {
@@ -262,6 +255,23 @@ fn load_mesh(
             read_from_accessor(data, &accessor)
         }
     };
+
+    let colors =
+        primitive
+            .get(&gltf::Semantic::Colors(0))
+            .map(|accessor| match accessor.data_type() {
+                DataType::U8 => vertex_colors::<u8>(data, &accessor, |value| {
+                    f16::from_f32(*value as f32 / u8::MAX as f32)
+                }),
+                DataType::U16 => vertex_colors::<u16>(data, &accessor, |value| {
+                    f16::from_f32(*value as f32 / u16::MAX as f32)
+                }),
+                DataType::F32 => {
+                    vertex_colors::<f32>(data, &accessor, |value| f16::from_f32(*value))
+                }
+                _ => panic!("invalid vertex color format"),
+            });
+
     let bounding_sphere = bounding_sphere(&primitive);
     let vertices = texcoords
         .iter()
@@ -272,6 +282,7 @@ fn load_mesh(
             tangent_frame: TangentFrame::new(*normal, *tangent),
             texcoord: texcoord.to_array().map(f16::from_f32),
         });
+
     let positions = positions.iter().flat_map(|position| {
         let position = (*position - bounding_sphere.center) / bounding_sphere.radius;
         debug_assert!(position.max_element() <= 1.0);
@@ -289,6 +300,14 @@ fn load_mesh(
     let index_count = indices.len() as u32;
     scene.indices.extend(indices);
 
+    let color_offset = colors
+        .map(|mut colors| {
+            let offset = scene.colors.len() as u32;
+            scene.colors.append(&mut colors);
+            offset
+        })
+        .unwrap_or(super::INVALID_INDEX);
+
     Mesh {
         vertex_count,
         index_count,
@@ -296,6 +315,7 @@ fn load_mesh(
         vertex_offset,
         index_offset,
         material,
+        color_offset,
     }
 }
 
@@ -344,12 +364,13 @@ fn bounding_sphere(primitive: &gltf::Primitive) -> BoundingSphere {
 }
 
 fn load_instances<'a>(nodes: impl Iterator<Item = gltf::Node<'a>>) -> Vec<Instance> {
-    let instances = nodes.map(|node| Instance {
-        model_index: node.mesh().map(|mesh| mesh.index() as u32),
-        transform: Mat4::from_cols_array_2d(&node.transform().matrix()),
-        children: load_instances(node.children()),
-    });
-    instances.collect()
+    nodes
+        .map(|node| Instance {
+            model_index: node.mesh().map(|mesh| mesh.index() as u32),
+            transform: Mat4::from_cols_array_2d(&node.transform().matrix()),
+            children: load_instances(node.children()),
+        })
+        .collect()
 }
 
 struct TextureSpecs {
@@ -411,10 +432,9 @@ fn compress_bytes(kind: TextureKind, width: u32, height: u32, bytes: &[u8]) -> V
         algorithm: texpresso::Algorithm::RangeFit,
         ..Default::default()
     };
-    let (width, height) = (width as usize, height as usize);
-    let size = format.compressed_size(width, height);
+    let size = format.compressed_size(width as usize, height as usize);
     let mut output = vec![0x0; size];
-    format.compress(bytes, width, height, params, &mut output);
+    format.compress(bytes, width as usize, height as usize, params, &mut output);
     output
 }
 

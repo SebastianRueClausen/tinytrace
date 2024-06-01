@@ -400,6 +400,7 @@
       }
     },
     {
+      "emissiveFactor": [1.0, 1.0, 1.0],
       "doubleSided": true,
       "pbrMetallicRoughness": {
         "baseColorFactor": [
@@ -409,6 +410,11 @@
           1.0
         ],
         "metallicFactor": 0.0
+      },
+      "extensions": {
+        "KHR_materials_emissive_strength": {
+          "emissiveStrength": 4
+        }
       }
     },
     {

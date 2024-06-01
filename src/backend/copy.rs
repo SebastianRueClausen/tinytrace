@@ -76,7 +76,7 @@ impl Context {
 
         // Upload scratch to buffers.
         writes.iter().fold(0, |offset, write| unsafe {
-            let byte_count = write.data.len() as u64;
+            let byte_count = write.data.len() as vk::DeviceSize;
             if byte_count != 0 {
                 let buffer_copy = vk::BufferCopy::default()
                     .src_offset(offset)
@@ -89,7 +89,7 @@ impl Context {
                     &[buffer_copy],
                 );
             }
-            offset + byte_count
+            offset + byte_count.next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
         });
         Ok(self)
     }
@@ -144,7 +144,7 @@ impl Context {
                         layout,
                         &[image_copy],
                     );
-                    buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as u64
+                    buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as vk::DeviceSize
                 },
             );
         Ok(self)

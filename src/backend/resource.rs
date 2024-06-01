@@ -339,6 +339,7 @@ impl MemoryLocation {
     }
 }
 
+/// A linearly allocated contigues block of memory.
 #[derive(Debug)]
 pub struct MemoryBlock {
     memory: vk::DeviceMemory,
@@ -399,13 +400,15 @@ pub struct MemoryIndex {
 
 const DEFAULT_BLOCK_SIZE: vk::DeviceSize = 1024 * 1024 * 20;
 
-/// A linear block allocator.
+// A linear block allocator.
 #[derive(Default, Debug)]
 pub struct Allocator {
+    // The block allocated for each memory type index.
     blocks: HashMap<u32, Vec<MemoryBlock>>,
 }
 
 impl Allocator {
+    // TODO: It might be worth checking previous blocks for free space.
     pub fn allocate(
         &mut self,
         device: &Device,
@@ -422,31 +425,35 @@ impl Allocator {
                 memory_type_index,
             )
         };
+
         if blocks.is_empty() {
             blocks.push(create_block()?);
         };
         let block = blocks.last_mut().unwrap();
+
+        // Either allocate memory from the current block or allocate a new block.
         if let Some(offset) = block.allocate(requirements.size, requirements.alignment) {
-            return Ok((
+            Ok((
                 block.memory,
                 MemoryIndex {
                     block_index: blocks.len() - 1,
                     memory_type_index,
                     offset,
                 },
-            ));
+            ))
+        } else {
+            let block = create_block()?;
+            let output = (
+                block.memory,
+                MemoryIndex {
+                    block_index: blocks.len(),
+                    memory_type_index,
+                    offset: 0,
+                },
+            );
+            blocks.push(block);
+            Ok(output)
         }
-        let block = create_block()?;
-        let output = (
-            block.memory,
-            MemoryIndex {
-                block_index: blocks.len(),
-                memory_type_index,
-                offset: 0,
-            },
-        );
-        blocks.push(block);
-        Ok(output)
     }
 
     pub fn map(&mut self, device: &Device, index: MemoryIndex) -> Result<*mut u8> {
@@ -553,7 +560,7 @@ impl Context {
             triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                 .vertex_stride(request.vertex_stride)
                 .vertex_format(request.vertex_format)
-                .max_vertex(request.first_vertex + request.vertex_count - 1)
+                .max_vertex(request.vertex_count - 1)
                 .index_data(indices.map(device_address).unwrap_or_default())
                 .vertex_data(vertices.map(device_address).unwrap_or_default())
                 .index_type(vk::IndexType::UINT32),
@@ -688,7 +695,7 @@ impl Context {
                 self.blas_geoemtry(
                     &self.blas(&build.blas).request,
                     Some(build.vertices.clone()),
-                    // We offset indices in `AccelerationStructureBuildRangeInfoKHR` instead.
+                    // Indices are offset in `AccelerationStructureBuildRangeInfoKHR` instead.
                     Some(BufferRange {
                         buffer: build.indices.buffer.clone(),
                         offset: 0,
@@ -852,6 +859,7 @@ impl Tlas {
 pub struct TlasInstance {
     pub blas: Handle<Blas>,
     pub transform: Mat4,
+    pub index: u32,
 }
 
 impl Context {
@@ -867,9 +875,11 @@ impl Context {
                 let transform = instance.transform.transpose().to_cols_array();
                 let flags = vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE
                     | vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE;
+                let index_bytes = instance.index.to_le_bytes();
                 TlasInstanceData {
                     blas_address: self.blas(&instance.blas).device_address(&self.device),
                     transform: array::from_fn(|index| transform[index]),
+                    index: array::from_fn(|index| index_bytes[index]),
                     flags: flags.as_raw() as u8,
                     mask: 0xff,
                     ..Default::default()
@@ -958,7 +968,7 @@ fn tlas_geometry_info(
 
 const STRUCTURE_SRC_ACCESS: Access = Access {
     stage: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
-    // Not an error, this is actually what the specs say.
+    // Not an error, this is actually what the spec say.
     access: vk::AccessFlags2::SHADER_READ,
 };
 const STRUCTURE_DST_ACCESS: Access = Access {

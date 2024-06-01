@@ -35,15 +35,18 @@ pub struct BoundingSphere {
     pub radius: f32,
 }
 
+unsafe impl bytemuck::NoUninit for BoundingSphere {}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Mesh {
     pub bounding_sphere: BoundingSphere,
     pub vertex_offset: u32,
     pub vertex_count: u32,
-    pub index_count: u32,
     pub index_offset: u32,
+    pub index_count: u32,
     pub material: u32,
+    pub color_offset: u32,
 }
 
 unsafe impl bytemuck::NoUninit for Mesh {}
@@ -106,6 +109,7 @@ pub struct Scene {
     pub directional_light: DirectionalLight,
     pub vertices: Vec<Vertex>,
     pub positions: Vec<i16>,
+    pub colors: Vec<f16>,
     pub indices: Vec<u32>,
     pub textures: Vec<Texture>,
     pub materials: Vec<Material>,
@@ -136,3 +140,5 @@ impl Scene {
         import::Data::new(path.as_ref()).and_then(|data| import::load_scene(&data))
     }
 }
+
+pub const INVALID_INDEX: u32 = u32::MAX;

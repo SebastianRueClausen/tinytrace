@@ -170,7 +170,6 @@ fn select_physical_device(instance: &Instance) -> Result<(vk::PhysicalDevice, u3
                 continue;
             }
             if properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
-                println!("{:?}", properties.device_name_as_c_str());
                 preferred.get_or_insert((physical_device, queue_index));
             }
             fallback.get_or_insert((physical_device, queue_index));

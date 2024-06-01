@@ -22,13 +22,11 @@ f16vec3 deterministic_orthonormal_vector(f16vec3 normal) {
 }
 
 float16_t dequantize_unorm(uint bits, uint value) {
-    float16_t scale = float16_t((1 << bits) - 1);
-    return float16_t(value) / scale;
+    return float16_t(value) / float16_t((1 << bits) - 1);
 }
 
 f16vec2 octahedron_encode(f16vec3 vector) {
     f16vec3 normal = vector / (abs(vector.x) + abs(vector.y) + abs(vector.z));
-
     if (normal.z < 0.0hf) {
         float16_t x = normal.x >= 0.0hf ? 1.0hf : 0.0hf;
         float16_t y = normal.y >= 0.0hf ? 1.0hf : 0.0hf;
@@ -77,23 +75,14 @@ struct Material {
 };
 
 struct BoundingSphere {
-    vec3 center;
-    float radius; 
-};
-
-struct Mesh {
-    BoundingSphere bounding_sphere;
-    uint vertex_offset;
-    uint vertex_count;
-    uint index_offset;
-    uint material;
+    float x, y, z;
+    float radius;
 };
 
 struct Instance {
-    mat4 transform;
+    mat4 transform, inverse_transform;
     f16mat4 normal_transform;
-    uint material;
-    uint padding[3];
+    uint vertex_offset, index_offset, color_offset, material;
 };
 
 struct Constants {
@@ -109,3 +98,5 @@ vec3 create_camera_ray(vec2 ndc, mat4 inverse_proj, mat4 inverse_view) {
     vec3 world_space_point = (inverse_view * view_space_point).xyz;
     return normalize(world_space_point);
 }
+
+const uint INVALID_INDEX = 4294967295;

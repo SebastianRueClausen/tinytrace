@@ -14,11 +14,10 @@ use crate::backend::{
 use super::error::Result;
 
 pub struct Scene {
-    pub positions: Handle<Buffer>,
+    pub colors: Handle<Buffer>,
     pub vertices: Handle<Buffer>,
     pub indices: Handle<Buffer>,
     pub materials: Handle<Buffer>,
-    pub meshes: Handle<Buffer>,
     pub instances: Handle<Buffer>,
     pub textures: Vec<Handle<Image>>,
     pub texture_sampler: Handle<Sampler>,
@@ -34,21 +33,24 @@ impl Scene {
             flatten_instance_tree(scene, instance, Mat4::IDENTITY, &mut objects);
         }
 
-        let instance_data = create_instances(&objects);
+        let instance_data: Vec<_> = objects
+            .iter()
+            .map(|object| Object::instance(object, &scene.meshes[object.mesh_index as usize]))
+            .collect();
 
         let positions = create_buffer(context, &scene.positions)?;
         let vertices = create_buffer(context, &scene.vertices)?;
+        let colors = create_buffer(context, &scene.colors)?;
         let indices = create_buffer(context, &scene.indices)?;
         let materials = create_buffer(context, &scene.materials)?;
-        let meshes = create_buffer(context, &scene.meshes)?;
         let instances = create_buffer(context, &instance_data)?;
 
         context.write_buffers(&[
             scene_buffer_write(&positions, &scene.positions),
             scene_buffer_write(&vertices, &scene.vertices),
+            scene_buffer_write(&colors, &scene.colors),
             scene_buffer_write(&indices, &scene.indices),
             scene_buffer_write(&materials, &scene.materials),
-            scene_buffer_write(&meshes, &scene.meshes),
             scene_buffer_write(&instances, &instance_data),
         ])?;
 
@@ -114,18 +116,21 @@ impl Scene {
             .collect();
         context.build_blases(&blas_builds).unwrap();
 
-        let tlas_instances = create_tlas_instances(scene, &objects, &blases);
+        let tlas_instances: Vec<_> = objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| object.tlas_instance(scene, &blases, index as u32))
+            .collect();
         let tlas = context.create_tlas(Lifetime::Scene, tlas_instances.len() as u32)?;
 
         let build_mode = vk::BuildAccelerationStructureModeKHR::BUILD;
         context.build_tlas(&tlas, build_mode, &tlas_instances)?;
 
         Ok(Self {
-            positions,
             vertices,
+            colors,
             indices,
             materials,
-            meshes,
             instances,
             textures,
             texture_sampler,
@@ -139,6 +144,45 @@ struct Object {
     mesh_index: u32,
     material: u32,
     transform: Mat4,
+}
+
+impl Object {
+    fn instance(&self, mesh: &asset::Mesh) -> Instance {
+        let asset::BoundingSphere { radius, center } = mesh.bounding_sphere;
+        let transform =
+            Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
+        Instance {
+            transform: self.transform * transform,
+            invese_transform: self.transform.inverse(),
+            normal_transform: self
+                .transform
+                .inverse()
+                .transpose()
+                .to_cols_array()
+                .map(f16::from_f32),
+            material: self.material,
+            vertex_offset: mesh.vertex_offset,
+            index_offset: mesh.index_count,
+            color_offset: mesh.color_offset,
+        }
+    }
+
+    fn tlas_instance(
+        &self,
+        scene: &asset::Scene,
+        blases: &[Handle<Blas>],
+        index: u32,
+    ) -> TlasInstance {
+        let asset::BoundingSphere { radius, center } =
+            scene.meshes[self.mesh_index as usize].bounding_sphere;
+        let transform =
+            Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
+        TlasInstance {
+            transform: self.transform * transform,
+            blas: blases[self.mesh_index as usize].clone(),
+            index,
+        }
+    }
 }
 
 fn flatten_instance_tree(
@@ -163,43 +207,6 @@ fn flatten_instance_tree(
     }
 
     transform
-}
-
-fn create_tlas_instances(
-    scene: &asset::Scene,
-    objects: &[Object],
-    blases: &[Handle<Blas>],
-) -> Vec<TlasInstance> {
-    objects
-        .iter()
-        .map(|object| {
-            let asset::BoundingSphere { radius, center } =
-                scene.meshes[object.mesh_index as usize].bounding_sphere;
-            let transform =
-                Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
-            TlasInstance {
-                transform: object.transform * transform,
-                blas: blases[object.mesh_index as usize].clone(),
-            }
-        })
-        .collect()
-}
-
-fn create_instances(objects: &[Object]) -> Vec<Instance> {
-    objects
-        .iter()
-        .map(|object| Instance {
-            normal_transform: object
-                .transform
-                .inverse()
-                .transpose()
-                .to_cols_array()
-                .map(f16::from_f32),
-            transform: object.transform,
-            material: object.material,
-            padding: Default::default(),
-        })
-        .collect()
 }
 
 fn texture_kind_format(kind: asset::TextureKind) -> vk::Format {
@@ -248,10 +255,13 @@ fn create_texture(context: &mut Context, texture: &asset::Texture) -> Result<Han
 }
 
 #[repr(C)]
-#[derive(bytemuck::NoUninit, Clone, Copy)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy)]
 struct Instance {
     transform: Mat4,
-    normal_transform: [f16; 16],
+    invese_transform: Mat4,
+    normal_transform: [f16; 4 * 4],
+    vertex_offset: u32,
+    index_offset: u32,
+    color_offset: u32,
     material: u32,
-    padding: [u32; 3],
 }

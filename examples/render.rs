@@ -173,6 +173,9 @@ impl Inputs {
 
 fn main() {
     let scene = tinytrace::asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
+    // let scene = tinytrace::asset::Scene::from_gltf("../glTF-Sample-Assets/Models/Duck/glTF/Duck.gltf").unwrap();
+    // let mut red_box = tinytrace::asset::Scene::from_gltf("../glTF-Sample-Assets/Models/Box/glTF/Box.gltf").unwrap();
+
     let mut app = App {
         last_update: Instant::now(),
         inputs: Inputs::default(),

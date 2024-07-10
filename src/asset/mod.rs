@@ -98,7 +98,7 @@ unsafe impl bytemuck::NoUninit for Material {}
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Vertex {
-    pub texcoord: [f16; 2],
+    pub tex_coord: [f16; 2],
     pub tangent_frame: TangentFrame,
 }
 

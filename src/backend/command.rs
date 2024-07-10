@@ -1,23 +1,52 @@
 use ash::vk;
 
-use super::{device::Device, Buffer};
-use crate::error::Error;
+use super::shader::DescriptorBuffer;
+use super::{device::Device, sync::Sync, Buffer};
+use super::{Allocator, BufferRequest, BufferType, MemoryLocation};
+use crate::error::{Error, Result};
 
+#[derive(Debug)]
 pub struct CommandBuffer {
+    pub pool: vk::CommandPool,
     pub buffer: vk::CommandBuffer,
+    pub descriptor_buffer: DescriptorBuffer,
+    /// The timestamp that is signaled when all commands have been executed.
+    pub timestamp: u64,
 }
 
 impl CommandBuffer {
-    pub fn new(device: &Device) -> Result<Self, Error> {
+    pub fn new(device: &Device, allocator: &mut Allocator) -> Result<Self> {
+        let pool = unsafe {
+            let info =
+                vk::CommandPoolCreateInfo::default().queue_family_index(device.queue_family_index);
+            device.create_command_pool(&info, None)?
+        };
         let allocate_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_pool(device.command_pool)
+            .command_pool(pool)
             .command_buffer_count(1);
         let buffers = unsafe { device.allocate_command_buffers(&allocate_info)? };
-        Ok(Self { buffer: buffers[0] })
+        let request = BufferRequest {
+            size: 1024 * 1024 * 4,
+            ty: BufferType::Descriptor,
+            memory_location: MemoryLocation::Host,
+        };
+        let buffer = Buffer::new(device, allocator, &request)?;
+        let descriptor_buffer = DescriptorBuffer {
+            data: allocator.map(device, buffer.memory_index)?,
+            size: request.size as usize,
+            bound_range: Default::default(),
+            buffer,
+        };
+        Ok(Self {
+            descriptor_buffer,
+            buffer: buffers[0],
+            timestamp: 0,
+            pool,
+        })
     }
 
-    pub fn begin(&self, device: &Device, descriptor_buffer: &Buffer) -> Result<(), Error> {
+    pub fn begin(&self, device: &Device) -> Result<()> {
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe {
@@ -25,8 +54,8 @@ impl CommandBuffer {
                 .begin_command_buffer(self.buffer, &begin_info)
                 .map_err(Error::from)?;
             let binding_infos = [vk::DescriptorBufferBindingInfoEXT::default()
-                .address(descriptor_buffer.device_address(device))
-                .usage(descriptor_buffer.usage_flags)];
+                .address(self.descriptor_buffer.buffer.device_address(device))
+                .usage(self.descriptor_buffer.buffer.usage_flags)];
             device
                 .descriptor_buffer
                 .cmd_bind_descriptor_buffers(self.buffer, &binding_infos);
@@ -34,7 +63,26 @@ impl CommandBuffer {
         Ok(())
     }
 
-    pub fn end(&self, device: &Device) -> Result<(), Error> {
+    pub fn end(&mut self, device: &Device, timestamp: u64) -> Result<()> {
+        self.descriptor_buffer.bound_range = 0..0;
+        self.timestamp = timestamp;
         unsafe { device.end_command_buffer(self.buffer).map_err(Error::from) }
+    }
+
+    pub fn clear(&self, semaphores: &Sync, device: &Device) -> Result<()> {
+        semaphores.wait_for_timestamp(device, self.timestamp)?;
+        unsafe {
+            let flags = vk::CommandPoolResetFlags::RELEASE_RESOURCES;
+            device
+                .reset_command_pool(self.pool, flags)
+                .map_err(Error::from)
+        }
+    }
+
+    pub fn destroy(&self, device: &Device) {
+        unsafe {
+            self.descriptor_buffer.buffer.destroy(device);
+            device.destroy_command_pool(self.pool, None);
+        }
     }
 }

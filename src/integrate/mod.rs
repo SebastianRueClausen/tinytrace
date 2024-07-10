@@ -66,6 +66,6 @@ impl Integrator {
             .bind_acceleration_structure("acceleration_structure", &scene.tlas)
             .bind_storage_image("target", target);
         let vk::Extent3D { width, height, .. } = context.image(target).extent;
-        context.dispatch(width, height);
+        context.dispatch(width, height).unwrap();
     }
 }

@@ -19,7 +19,7 @@ use backend::{
     MemoryLocation,
 };
 use camera::Camera;
-use error::Result;
+use error::{Error, ErrorKind, Result};
 use glam::{Mat4, UVec2, Vec2, Vec4};
 use integrate::Integrator;
 use post_process::PostProcess;
@@ -131,15 +131,14 @@ impl Renderer {
         let post_process = self
             .post_process
             .as_mut()
-            .expect("trying to render to surface with no window");
+            .ok_or_else(|| Error::from(ErrorKind::MissingSurface))?;
         let swapchain_image = self.context.swapchain_image()?;
         post_process.run(
             &mut self.context,
             &self.constants,
             &self.render_target,
             &swapchain_image,
-        );
-
+        )?;
         self.context.present(&swapchain_image)
     }
 

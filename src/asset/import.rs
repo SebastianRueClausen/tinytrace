@@ -240,16 +240,21 @@ fn load_mesh(
         }
     };
 
-    let texcoords = match primitive.get(&gltf::Semantic::TexCoords(0)) {
+    let tex_coords = match primitive.get(&gltf::Semantic::TexCoords(0)) {
         None => vec![Vec2::ZERO; normals.len()],
         Some(accessor) => {
-            verify_accessor("texcoords", &accessor, DataType::F32, Dimensions::Vec2);
+            verify_accessor(
+                "texture coordinates",
+                &accessor,
+                DataType::F32,
+                Dimensions::Vec2,
+            );
             read_from_accessor(data, &accessor)
         }
     };
 
     let tangents = match primitive.get(&gltf::Semantic::Tangents) {
-        None => generate_tangents(&positions, &texcoords, &normals, &indices),
+        None => generate_tangents(&positions, &tex_coords, &normals, &indices),
         Some(accessor) => {
             verify_accessor("tangents", &accessor, DataType::F32, Dimensions::Vec4);
             read_from_accessor(data, &accessor)
@@ -273,14 +278,14 @@ fn load_mesh(
             });
 
     let bounding_sphere = bounding_sphere(&primitive);
-    let vertices = texcoords
+    let vertices = tex_coords
         .iter()
         .cloned()
         .zip(normals.iter())
         .zip(tangents.iter())
-        .map(|((texcoord, normal), tangent)| Vertex {
+        .map(|((tex_coord, normal), tangent)| Vertex {
             tangent_frame: TangentFrame::new(*normal, *tangent),
-            texcoord: texcoord.to_array().map(f16::from_f32),
+            tex_coord: tex_coord.to_array().map(f16::from_f32),
         });
 
     let positions = positions.iter().flat_map(|position| {
@@ -480,14 +485,14 @@ pub fn generate_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
 
 pub fn generate_tangents(
     positions: &[Vec3],
-    texcoords: &[Vec2],
+    tex_coords: &[Vec2],
     normals: &[Vec3],
     indices: &[u32],
 ) -> Vec<Vec4> {
     let tangents = vec![Vec4::ZERO; positions.len()];
     let mut generator = TangentGenerator {
         positions,
-        texcoords,
+        tex_coords,
         normals,
         indices,
         tangents,
@@ -503,7 +508,7 @@ pub fn generate_tangents(
 
 struct TangentGenerator<'a> {
     positions: &'a [Vec3],
-    texcoords: &'a [Vec2],
+    tex_coords: &'a [Vec2],
     normals: &'a [Vec3],
     indices: &'a [u32],
     tangents: Vec<Vec4>,
@@ -533,7 +538,7 @@ impl<'a> mikktspace::Geometry for TangentGenerator<'a> {
     }
 
     fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
-        self.texcoords[self.index(face, vert)].into()
+        self.tex_coords[self.index(face, vert)].into()
     }
 
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {

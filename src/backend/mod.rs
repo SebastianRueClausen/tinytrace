@@ -1,6 +1,6 @@
 //! # The backend tinytrace
 //!
-//! The Vulkan backend of tinytrace. It is written to both have a simple implementation and be
+//! The Vulkan backend of tinytrace. It is written to both be a simple implementation and be
 //! simple to use. It makes a few compromises to make this possible:
 //! * Only use compute shaders.
 //! * Only use a single command buffer.
@@ -8,12 +8,10 @@
 //! * Limited use of buffers and images.
 //!
 //! In order to not be painful to use, it does a lot of stuff automatically:
-//! * Synchronization.
-//! * Uploading and downloading of data.
-//! * Descriptor management.
-//! * Resource cleanup.
-//!
-//! It's not really a safe abtraction, but does catch a foot guns.
+//! * Synchronize between commands.
+//! * Upload and download buffers and images.
+//! * Manage descriptors.
+//! * Cleanup resources.
 
 pub mod command;
 pub mod copy;
@@ -32,7 +30,9 @@ mod test;
 use std::collections::HashMap;
 use std::slice;
 
-use self::sync::Semaphores;
+use crate::error::ErrorKind;
+
+use self::sync::Sync;
 use self::{surface::Swapchain, sync::Access};
 
 use super::error::{Error, Result};
@@ -47,14 +47,20 @@ pub use resource::{
     Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, MemoryLocation,
     Sampler, SamplerRequest, Tlas,
 };
+use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};
-use shader::{BoundShader, DescriptorBuffer};
 
+/// The lifetime of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifetime {
+    /// The resource is never cleared.
     Static,
+    /// The resource lives as long as the surface, usually meaning that it is
+    /// tied to the surface size.
     Surface,
+    /// The resource lives as long as the scene.
     Scene,
+    /// The resource only lives for the current frame.
     Frame,
 }
 
@@ -71,7 +77,34 @@ struct Pool {
 }
 
 impl Pool {
-    fn clear(&mut self, device: &Device) {
+    fn clear_accesses(&mut self) {
+        for buffer in &mut self.buffers {
+            buffer.access = Access::default();
+        }
+        for image in &mut self.images {
+            image.access = Access::default();
+        }
+        for blas in &mut self.blases {
+            blas.access = Access::default();
+        }
+        for tlas in &mut self.tlases {
+            tlas.access = Access::default();
+        }
+    }
+
+    fn clear(&mut self, semaphores: &Sync, device: &Device) -> Result<()> {
+        macro_rules! timestamp {
+            ($item:ident) => {
+                self.$item.iter().map(|b| b.timestamp).max().unwrap_or(0)
+            };
+        }
+        let timestamps = [
+            timestamp!(buffers),
+            timestamp!(images),
+            timestamp!(blases),
+            timestamp!(tlases),
+        ];
+        semaphores.wait_for_timestamp(device, timestamps.into_iter().max().unwrap_or(0))?;
         macro_rules! drain {
             ($($item:ident), *) => {
                 $(self.$item.drain(..).for_each(|b| b.destroy(device));)*
@@ -80,51 +113,47 @@ impl Pool {
         drain!(tlases, blases, samplers, buffers, images, shaders);
         self.allocator.destroy(device);
         self.epoch += 1;
+        Ok(())
     }
 }
 
 pub struct Context {
-    pools: HashMap<Lifetime, Pool>,
-    /// The only command buffer used. It is always recording.
-    command_buffer: CommandBuffer,
-    device: Device,
     instance: Instance,
-    bound_shader: Option<BoundShader>,
-    descriptor_buffer: DescriptorBuffer,
-    semaphores: Semaphores,
+    device: Device,
+    /// Swapchain and swapchain images.
     swapchain: Option<(Swapchain, Vec<Handle<Image>>)>,
+    pools: HashMap<Lifetime, Pool>,
+    /// Ring-buffer of command buffers. The first command buffer is always active.
+    command_buffers: Vec<CommandBuffer>,
+    bound_shader: Option<BoundShader>,
+    /// The index of the last acquired swapchain swapchain image.
+    acquired_swapchain_image: Option<usize>,
+    /// Map from path to source of shader includes.
     includes: HashMap<&'static str, String>,
+    sync: Sync,
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
+        self.execute_commands(false)
+            .expect("failed to execute commands");
+        self.device
+            .wait_until_idle()
+            .expect("failed to wait to idle");
         for pool in self.pools.values_mut() {
-            pool.clear(&self.device);
+            pool.clear(&self.sync, &self.device)
+                .expect("failed to destroy resources");
         }
-        self.semaphores.destroy(&self.device);
-        if let Some((swaphchain, _)) = &self.swapchain {
-            swaphchain.destroy(&self.device);
+        for command_buffer in self.command_buffers.drain(..) {
+            command_buffer.destroy(&self.device);
+        }
+        self.sync.destroy(&self.device);
+        if let Some((swapchain, _)) = &self.swapchain {
+            swapchain.destroy(&self.device);
         }
         self.device.destroy();
         self.instance.destroy();
     }
-}
-
-fn create_descriptor_buffer(device: &Device, pool: &mut Pool) -> Result<DescriptorBuffer> {
-    let request = BufferRequest {
-        size: 1024 * 1024 * 4,
-        ty: BufferType::Descriptor,
-        memory_location: MemoryLocation::Host,
-    };
-
-    let buffer = Buffer::new(device, &mut pool.allocator, &request)?;
-
-    Ok(DescriptorBuffer {
-        data: pool.allocator.map(device, buffer.memory_index)?,
-        buffer: Handle::new(Lifetime::Static, 0, &mut pool.buffers, buffer),
-        bound_range: 0..0,
-        size: request.size as usize,
-    })
 }
 
 impl Context {
@@ -136,7 +165,6 @@ impl Context {
         let device = Device::new(&instance)?;
 
         let (mut static_pool, mut surface_pool) = (Pool::default(), Pool::default());
-        let descriptor_buffer = create_descriptor_buffer(&device, &mut static_pool)?;
 
         let swapchain = if let Some((window, display)) = window {
             let (swapchain, images) = Swapchain::new(&instance, &device, window, display, extent)?;
@@ -149,28 +177,45 @@ impl Context {
             None
         };
 
-        let context = Self {
-            pools: HashMap::from([
-                (Lifetime::Static, static_pool),
-                (Lifetime::Surface, surface_pool),
-            ]),
-            command_buffer: CommandBuffer::new(&device)?,
-            semaphores: Semaphores::new(&device)?,
+        let command_buffers: Vec<_> = (0..COMMAND_BUFFER_COUNT)
+            .map(|_| CommandBuffer::new(&device, &mut static_pool.allocator))
+            .collect::<Result<_>>()?;
+
+        let pools = HashMap::from([
+            (Lifetime::Static, static_pool),
+            (Lifetime::Surface, surface_pool),
+        ]);
+
+        let mut context = Self {
+            sync: Sync::new(&device, FRAMES_IN_FLIGHT)?,
             includes: HashMap::default(),
-            descriptor_buffer,
+            acquired_swapchain_image: None,
+            command_buffers,
             bound_shader: None,
             swapchain,
             device,
+            pools,
             instance,
         };
 
-        context.begind_command_buffer()?;
+        context.begin_next_command_buffer()?;
+
         Ok(context)
     }
 
-    fn begind_command_buffer(&self) -> Result<()> {
-        self.command_buffer
-            .begin(&self.device, self.buffer(&self.descriptor_buffer.buffer))
+    fn command_buffer(&self) -> &CommandBuffer {
+        self.command_buffers.first().unwrap()
+    }
+
+    fn command_buffer_mut(&mut self) -> &mut CommandBuffer {
+        self.command_buffers.first_mut().unwrap()
+    }
+
+    fn begin_next_command_buffer(&mut self) -> Result<()> {
+        self.command_buffers.rotate_right(1);
+        let buffer = self.command_buffers.first_mut().unwrap();
+        buffer.clear(&self.sync, &self.device)?;
+        buffer.begin(&self.device)
     }
 
     fn check_handle<T>(&self, handle: &Handle<T>) {
@@ -181,11 +226,13 @@ impl Context {
         self.pools.entry(lifetime).or_default()
     }
 
+    /// Advance `lifetime`. This destroys all resources with `lifetime` and
+    /// invalidates their handles.
     pub fn advance_lifetime(&mut self, lifetime: Lifetime) -> Result<()> {
-        // TODO: Maybe check of commands have been recorded before doing this.
-        self.execute_commands()?;
+        // TODO: Maybe check if commands have been recorded before doing this.
+        self.execute_commands(false)?;
         if let Some(pool) = self.pools.get_mut(&lifetime) {
-            pool.clear(&self.device);
+            pool.clear(&self.sync, &self.device)?;
         }
         Ok(())
     }
@@ -220,13 +267,19 @@ impl Context {
 }
 
 impl Context {
-    pub fn surface_format(&self) -> vk::Format {
-        let (swapchain, _) = self.swapchain.as_ref().expect("no swapchain");
-        swapchain.format
+    fn swapchain(&self) -> Result<&(Swapchain, Vec<Handle<Image>>)> {
+        self.swapchain
+            .as_ref()
+            .ok_or_else(|| Error::from(ErrorKind::MissingSurface))
     }
 
-    pub fn add_include(&mut self, name: &'static str, source: String) {
-        self.includes.insert(name, source);
+    pub fn surface_format(&self) -> Result<vk::Format> {
+        self.swapchain().map(|(swapchain, _)| swapchain.format)
+    }
+
+    /// Add shader include. This allows shaders to include this using `path`.
+    pub fn add_include(&mut self, path: &'static str, source: String) {
+        self.includes.insert(path, source);
     }
 
     pub fn create_sampler(
@@ -239,47 +292,63 @@ impl Context {
             .map(|sampler| Handle::new(lifetime, pool.epoch, &mut pool.samplers, sampler))
     }
 
-    pub fn execute_commands(&mut self) -> Result<()> {
-        self.command_buffer.end(&self.device)?;
-        let wait = self
-            .semaphores
-            .image_acquired
-            .then_some(self.semaphores.acquire);
-        let signal = (!self.semaphores.image_released).then_some(self.semaphores.release);
-        let submit_info = vk::SubmitInfo::default()
-            .wait_dst_stage_mask(slice::from_ref(&vk::PipelineStageFlags::ALL_COMMANDS))
-            .command_buffers(slice::from_ref(&self.command_buffer.buffer))
-            .signal_semaphores(signal.as_slice())
-            .wait_semaphores(wait.as_slice());
+    /// Executes all recorded commands. Returns the timestamp signaled when when done.
+    pub fn execute_commands(&mut self, present: bool) -> Result<u64> {
+        let (wait, signal) = self.sync.advance_timestamp();
+
+        let command_buffer = self.command_buffers.first_mut().unwrap();
+        command_buffer.end(&self.device, signal)?;
+
+        let mut wait = vec![semaphore_submit_info(self.sync.timeline, wait)];
+        let mut signal = vec![semaphore_submit_info(self.sync.timeline, signal)];
+
+        // If we are about to present, we wait for the swapchain image to be
+        // acquired and signal when it is "released", meaning all commands are
+        // done executing. This is required as present can't wait for timeline
+        // semaphores.
+        if present {
+            wait.push(semaphore_submit_info(self.sync.frame(0).acquired, 0));
+            signal.push(semaphore_submit_info(self.sync.frame(0).released, 0));
+        }
+
+        let command_buffer_info =
+            vk::CommandBufferSubmitInfo::default().command_buffer(self.command_buffer().buffer);
+        let submit_info = vk::SubmitInfo2::default()
+            .command_buffer_infos(slice::from_ref(&command_buffer_info))
+            .wait_semaphore_infos(&wait)
+            .signal_semaphore_infos(&signal);
         unsafe {
-            self.device
-                .queue_submit(self.device.queue, &[submit_info], vk::Fence::null())?;
+            self.device.queue_submit2(
+                self.device.queue,
+                slice::from_ref(&submit_info),
+                vk::Fence::null(),
+            )?;
         }
 
-        self.device.wait_until_idle()?;
-        self.device.clear_command_pool()?;
-
+        // The following commands are going to be recorded to another command
+        // buffer, so all command buffer local data most be reset.
+        self.pools.values_mut().for_each(Pool::clear_accesses);
         self.bound_shader = None;
-        self.descriptor_buffer.bound_range = 0..0;
 
-        for pool in self.pools.values_mut() {
-            for buffer in &mut pool.buffers {
-                buffer.access = Access::default();
-            }
-            for image in &mut pool.images {
-                image.access = Access::default();
-            }
-        }
+        self.begin_next_command_buffer()?;
 
-        self.begind_command_buffer()
+        Ok(self.sync.timestamp)
     }
 
+    /// Acquire the next swapchain image.
     pub fn swapchain_image(&mut self) -> Result<Handle<Image>> {
-        let (swapchain, images) = self.swapchain.as_ref().expect("no swapchain");
-        self.semaphores.image_acquired = true;
-        swapchain
-            .image_index(&mut self.semaphores)
-            .map(|index| images[index as usize].clone())
+        // Wait here to avoid the CPU being to far ahead of the GPU. Also ensure that
+        // the `acquired` semaphore is available.
+        if let Some(timestamp) = self.sync.frame(0).present_timestamp {
+            self.sync.wait_for_timestamp(&self.device, timestamp)?;
+        }
+
+        let (swapchain, images) = self.swapchain()?;
+        let index = swapchain.image_index(self.sync.frame(0).acquired)? as usize;
+        let image = images[index].clone();
+        self.acquired_swapchain_image = Some(index);
+
+        Ok(image)
     }
 
     pub fn present(&mut self, image: &Handle<Image>) -> Result<()> {
@@ -287,16 +356,24 @@ impl Context {
             stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
             access: vk::AccessFlags2::empty(),
         };
-        self.access_resources(&[(image.clone(), access)], &[], &[], &[]);
-        self.execute_commands()?;
+        self.access_resources(&[(image.clone(), access)], &[], &[], &[])?;
 
-        let (swapchain, _) = self.swapchain.as_ref().expect("no swapchain");
-        self.semaphores.image_acquired = false;
-        let image_index = self
-            .image(image)
-            .swapchain_index
-            .expect("image is not swapchain image");
-        swapchain.present(&self.device, &self.semaphores, image_index)
+        let timestamp = self.execute_commands(true)?;
+
+        if let Some(image_index) = self.acquired_swapchain_image.take().map(|i| i as u32) {
+            if self.image(image).swapchain_index != Some(image_index) {
+                return Err(Error::from(ErrorKind::WrongSwapchainImage {
+                    index: self.image(image).swapchain_index,
+                    expected: image_index,
+                }));
+            }
+            let (swapchain, _) = self.swapchain()?;
+            swapchain.present(&self.device, self.sync.frame(0).released, image_index)?;
+            self.sync.advance_frame(timestamp);
+            Ok(())
+        } else {
+            Err(Error::from(ErrorKind::NoSwapchainImage))
+        }
     }
 
     fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Handle<Buffer>, *mut u8)> {
@@ -315,3 +392,13 @@ impl Context {
         Ok((handle, mapping))
     }
 }
+
+fn semaphore_submit_info(semaphore: vk::Semaphore, value: u64) -> vk::SemaphoreSubmitInfo<'static> {
+    vk::SemaphoreSubmitInfo::default()
+        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .semaphore(semaphore)
+        .value(value)
+}
+
+const COMMAND_BUFFER_COUNT: usize = 4;
+const FRAMES_IN_FLIGHT: usize = 2;

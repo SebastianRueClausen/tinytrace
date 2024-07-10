@@ -55,6 +55,7 @@ pub struct Buffer {
     pub size: vk::DeviceSize,
     pub access: Access,
     pub usage_flags: vk::BufferUsageFlags,
+    pub timestamp: u64,
 }
 
 impl Context {
@@ -90,6 +91,7 @@ impl Buffer {
         }
         Ok(Self {
             access: Access::default(),
+            timestamp: 0,
             usage_flags,
             size,
             buffer,
@@ -148,6 +150,7 @@ pub struct Image {
     pub swapchain_index: Option<u32>,
     pub layout: vk::ImageLayout,
     pub access: Access,
+    pub timestamp: u64,
     pub usage_flags: vk::ImageUsageFlags,
 }
 
@@ -185,8 +188,9 @@ impl Context {
             self.device.bind_image_memory(image, memory, index.offset)?;
         }
         let image = Image {
-            view: create_image_view(&self.device, image, request.format, request.mip_level_count)?,
             access: Access::default(),
+            timestamp: 0,
+            view: create_image_view(&self.device, image, request.format, request.mip_level_count)?,
             aspect: format_aspect(request.format),
             extent: request.extent,
             format: request.format,
@@ -522,6 +526,7 @@ pub struct Blas {
     build_scratch_size: vk::DeviceSize,
     request: BlasRequest,
     pub access: Access,
+    pub timestamp: u64,
     buffer: Handle<Buffer>,
 }
 
@@ -613,6 +618,7 @@ impl Context {
         };
         let blas = Blas {
             access: Access::default(),
+            timestamp: 0,
             build_scratch_size: size_info.build_scratch_size,
             acceleration_structure,
             request: *request,
@@ -713,12 +719,12 @@ impl Context {
             .iter()
             .map(|build| (build.blas.clone(), STRUCTURE_DST_ACCESS))
             .collect();
-        self.access_resources(&[], &buffer_accesses, &blas_accesses, &[]);
+        self.access_resources(&[], &buffer_accesses, &blas_accesses, &[])?;
         unsafe {
             self.device
                 .acceleration_structure
                 .cmd_build_acceleration_structures(
-                    self.command_buffer.buffer,
+                    self.command_buffer().buffer,
                     &build_infos,
                     &range_infos_refs,
                 );
@@ -734,6 +740,7 @@ pub struct Tlas {
     pub scratch: Handle<Buffer>,
     pub instances: Handle<Buffer>,
     pub access: Access,
+    pub timestamp: u64,
 }
 
 impl Context {
@@ -812,6 +819,7 @@ impl Context {
         };
         let tlas = Tlas {
             access: Access::default(),
+            timestamp: 0,
             acceleration_structure,
             instances,
             buffer,
@@ -902,12 +910,12 @@ impl Context {
             (self.tlas(tlas).instances.clone(), STRUCTURE_SRC_ACCESS),
             (self.tlas(tlas).scratch.clone(), scratch_access),
         ];
-        self.access_resources(&[], &buffer_accesses, &blas_accesses, &tlas_accesses);
+        self.access_resources(&[], &buffer_accesses, &blas_accesses, &tlas_accesses)?;
         unsafe {
             self.device
                 .acceleration_structure
                 .cmd_build_acceleration_structures(
-                    self.command_buffer.buffer,
+                    self.command_buffer().buffer,
                     slice::from_ref(&build_info),
                     slice::from_ref(&slice::from_ref(&build_ranges)),
                 );

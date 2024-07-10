@@ -35,9 +35,9 @@ impl ApplicationHandler for App {
             window.display_handle().unwrap().as_raw(),
         );
 
-        let mut renderer = Renderer::new(Some(handles), extent).unwrap();
+        let mut renderer =
+            Renderer::new(Some(handles), extent).unwrap_or_else(|error| panic!("{error:#?}"));
         renderer.set_scene(&self.scene).unwrap();
-        renderer.context.execute_commands().unwrap();
 
         self.state = Some((window, renderer));
         event_loop.set_control_flow(ControlFlow::Poll);

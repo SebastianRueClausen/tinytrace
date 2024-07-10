@@ -17,22 +17,12 @@ pub struct ImageWrite<'a> {
     pub mips: &'a [Box<[u8]>],
 }
 
+/// Data of the downloaded resources.
 #[derive(Debug)]
 pub struct Download {
     pub buffers: HashMap<Handle<Buffer>, Box<[u8]>>,
     pub images: HashMap<Handle<Image>, Box<[u8]>>,
 }
-
-const CHUNK_ALIGNMENT: usize = 16;
-
-const WRITE_ACCESS: Access = Access {
-    stage: vk::PipelineStageFlags2::TRANSFER,
-    access: vk::AccessFlags2::TRANSFER_WRITE,
-};
-const READ_ACCESS: Access = Access {
-    stage: vk::PipelineStageFlags2::TRANSFER,
-    access: vk::AccessFlags2::TRANSFER_READ,
-};
 
 fn buffer_image_copy(
     aspect: vk::ImageAspectFlags,
@@ -61,7 +51,7 @@ impl Context {
             .iter()
             .map(|write| (write.buffer.clone(), WRITE_ACCESS))
             .collect();
-        self.access_resources(&[], &buffer_accesses, &[], &[]);
+        self.access_resources(&[], &buffer_accesses, &[], &[])?;
 
         // Create and write to scratch.
         let scratch_size: usize = writes
@@ -83,7 +73,7 @@ impl Context {
                     .dst_offset(0)
                     .size(byte_count);
                 self.device.cmd_copy_buffer(
-                    self.command_buffer.buffer,
+                    self.command_buffer().buffer,
                     self.buffer(&scratch).buffer,
                     self.buffer(&write.buffer).buffer,
                     &[buffer_copy],
@@ -99,7 +89,7 @@ impl Context {
             .iter()
             .map(|write| (write.image.clone(), WRITE_ACCESS))
             .collect();
-        self.access_resources(&image_accesses, &[], &[], &[]);
+        self.access_resources(&image_accesses, &[], &[], &[])?;
 
         // Create and write to scratch.
         let scratch_size = writes
@@ -138,7 +128,7 @@ impl Context {
                         buffer_image_copy(image.aspect, level, buffer_offset, offset, extent);
                     let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     self.device.cmd_copy_buffer_to_image(
-                        self.command_buffer.buffer,
+                        self.command_buffer().buffer,
                         self.buffer(&scratch).buffer,
                         image.image,
                         layout,
@@ -166,7 +156,7 @@ impl Context {
             .iter()
             .map(|buffer| (buffer.clone(), READ_ACCESS))
             .collect();
-        self.access_resources(&image_accesses, &buffer_accesses, &[], &[]);
+        self.access_resources(&image_accesses, &buffer_accesses, &[], &[])?;
 
         // Figure out scratch size.
         let buffer_scratch_size: vk::DeviceSize = buffers
@@ -206,7 +196,7 @@ impl Context {
                 .collect();
             let layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
             self.device.cmd_copy_image_to_buffer(
-                self.command_buffer.buffer,
+                self.command_buffer().buffer,
                 image.image,
                 layout,
                 self.buffer(&scratch).buffer,
@@ -229,7 +219,7 @@ impl Context {
                         .dst_offset(scratch_offset)
                         .size(byte_count);
                     self.device.cmd_copy_buffer(
-                        self.command_buffer.buffer,
+                        self.command_buffer().buffer,
                         self.buffer(buffer).buffer,
                         self.buffer(&scratch).buffer,
                         &[buffer_copy],
@@ -238,7 +228,10 @@ impl Context {
                 scratch_offset + byte_count.next_multiple_of(CHUNK_ALIGNMENT as vk::DeviceSize)
             });
 
-        self.execute_commands()?;
+        self.execute_commands(false)?;
+
+        // TODO: It's not necessary to wait for idle here.
+        self.device.wait_until_idle()?;
 
         // Copy data from scratch memory.
         let mut copy_from_mapping = |size| unsafe {
@@ -265,3 +258,16 @@ impl Context {
         Ok(Download { buffers, images })
     }
 }
+
+/// The alignment of each chunk copied.
+const CHUNK_ALIGNMENT: usize = 16;
+
+const WRITE_ACCESS: Access = Access {
+    stage: vk::PipelineStageFlags2::TRANSFER,
+    access: vk::AccessFlags2::TRANSFER_WRITE,
+};
+
+const READ_ACCESS: Access = Access {
+    stage: vk::PipelineStageFlags2::TRANSFER,
+    access: vk::AccessFlags2::TRANSFER_READ,
+};

@@ -3,6 +3,7 @@ use std::{mem, ops, slice};
 
 use ash::vk;
 
+use super::command::CommandBuffer;
 use super::device::Device;
 use super::glsl::render_shader;
 use super::sync::Access;
@@ -211,6 +212,14 @@ pub(super) struct BoundShader {
 }
 
 impl BoundShader {
+    fn new(shader: Handle<Shader>) -> Self {
+        Self {
+            bound: HashMap::default(),
+            has_been_dispatched: false,
+            shader,
+        }
+    }
+
     fn bind_image(
         &mut self,
         name: &'static str,
@@ -240,8 +249,9 @@ impl BoundShader {
     }
 }
 
-pub(super) struct DescriptorBuffer {
-    pub buffer: Handle<Buffer>,
+#[derive(Debug)]
+pub struct DescriptorBuffer {
+    pub buffer: Buffer,
     pub data: *mut u8,
     pub size: usize,
     pub bound_range: ops::Range<usize>,
@@ -474,24 +484,24 @@ impl Context {
             pipeline,
         ))
     }
+}
 
+fn current_descriptor_buffer(command_buffers: &mut [CommandBuffer]) -> &mut DescriptorBuffer {
+    &mut command_buffers.first_mut().unwrap().descriptor_buffer
+}
+
+impl Context {
     pub fn bind_shader(&mut self, shader: &Handle<Shader>) -> &mut Self {
-        self.bound_shader = Some(BoundShader {
-            bound: HashMap::default(),
-            shader: shader.clone(),
-            has_been_dispatched: false,
-        });
-        let bind_point = vk::PipelineBindPoint::COMPUTE;
-        let pipeline = self.shader(shader);
+        self.bound_shader = Some(BoundShader::new(shader.clone()));
         unsafe {
             self.device.cmd_bind_pipeline(
-                self.command_buffer.buffer,
-                bind_point,
-                pipeline.pipeline,
+                self.command_buffer().buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.shader(shader).pipeline,
             );
         }
-        self.descriptor_buffer
-            .allocate_range(pipeline.descriptor_size(&self.device));
+        let descriptor_size = self.shader(shader).descriptor_size(&self.device);
+        current_descriptor_buffer(&mut self.command_buffers).allocate_range(descriptor_size);
         self
     }
 
@@ -520,12 +530,17 @@ impl Context {
         let duplicate_descriptor = images.iter().fold(false, |duplicate, image| {
             duplicate | bound_shader.bind_image(name, image, binding.access_flags)
         });
-        self.descriptor_buffer
+        self.command_buffer_mut()
+            .descriptor_buffer
             .maybe_duplicate_range(duplicate_descriptor);
         let image_views: Vec<_> = images.iter().map(|image| self.image(image).view).collect();
         let sampler = sampler.map(|sampler| self.sampler(sampler).sampler);
-        self.descriptor_buffer
-            .write_images(&self.device, &image_views, sampler, &binding);
+        current_descriptor_buffer(&mut self.command_buffers).write_images(
+            &self.device,
+            &image_views,
+            sampler,
+            &binding,
+        );
         self
     }
 
@@ -567,10 +582,9 @@ impl Context {
                 .bind_buffer(name, buffer, binding.access_flags);
         let buffer = self.buffer(buffer);
         let (address, size) = (buffer.device_address(&self.device), buffer.size);
-        self.descriptor_buffer
-            .maybe_duplicate_range(duplicate_descriptor);
-        self.descriptor_buffer
-            .write_buffer(&self.device, address, size, &binding);
+        let descriptor_buffer = current_descriptor_buffer(&mut self.command_buffers);
+        descriptor_buffer.maybe_duplicate_range(duplicate_descriptor);
+        descriptor_buffer.write_buffer(&self.device, address, size, &binding);
         self
     }
 
@@ -585,16 +599,15 @@ impl Context {
             .bind_acceleration_structure(name, tlas);
         let tlas = self.tlas(tlas);
         let address = tlas.device_address(&self.device);
-        self.descriptor_buffer
-            .maybe_duplicate_range(duplicate_descriptor);
-        self.descriptor_buffer
-            .write_acceleration_structure(&self.device, address, &binding);
+        let descriptor_buffer = current_descriptor_buffer(&mut self.command_buffers);
+        descriptor_buffer.maybe_duplicate_range(duplicate_descriptor);
+        descriptor_buffer.write_acceleration_structure(&self.device, address, &binding);
         self
     }
 
     fn set_descriptor(&self, offset: u64, layout: vk::PipelineLayout) {
         let point = vk::PipelineBindPoint::COMPUTE;
-        let buffer = self.command_buffer.buffer;
+        let buffer = self.command_buffer().buffer;
         unsafe {
             let loader = &self.device.descriptor_buffer;
             loader.cmd_set_descriptor_buffer_offsets(buffer, point, layout, 0, &[0], &[offset]);
@@ -612,7 +625,7 @@ impl Context {
     }
 
     /// Dispatch bound shader with `width` * `height` threads.
-    pub fn dispatch(&mut self, width: u32, height: u32) -> &mut Self {
+    pub fn dispatch(&mut self, width: u32, height: u32) -> Result<&mut Self> {
         self.bound_shader_mut().has_been_dispatched = true;
 
         let create_access = |access: vk::AccessFlags2| Access {
@@ -621,7 +634,6 @@ impl Context {
         };
 
         let (mut buffers, mut images, mut tlases) = (Vec::new(), Vec::new(), Vec::new());
-
         self.bound_shader()
             .bound
             .values()
@@ -637,22 +649,23 @@ impl Context {
                     tlases.push((tlas.clone(), create_access(access)));
                 }
             });
-        self.access_resources(&images, &buffers, &[], &tlases);
+        self.access_resources(&images, &buffers, &[], &tlases)?;
 
         let bound_shader = self.bound_shader();
         self.check_all_bindings_are_bound(bound_shader);
 
         let shader = self.shader(&bound_shader.shader);
-        let offset = self.descriptor_buffer.bound_range.start as vk::DeviceSize;
+        let offset = self.command_buffer().descriptor_buffer.bound_range.start as vk::DeviceSize;
         self.set_descriptor(offset, shader.layout);
 
         let width = width.div_ceil(shader.block_size.width);
         let height = height.div_ceil(shader.block_size.height);
+
         unsafe {
             self.device
-                .cmd_dispatch(self.command_buffer.buffer, width, height, 1);
+                .cmd_dispatch(self.command_buffer().buffer, width, height, 1);
         }
 
-        self
+        Ok(self)
     }
 }

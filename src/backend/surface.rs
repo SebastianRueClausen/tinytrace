@@ -3,8 +3,10 @@ use std::slice;
 use ash::{khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
+use crate::error::ErrorKind;
+
 use super::resource;
-use super::sync::{Access, Semaphores};
+use super::sync::Access;
 use super::{Device, Error, Image, Instance, Result};
 
 pub struct Swapchain {
@@ -75,6 +77,7 @@ impl Swapchain {
                     aspect: vk::ImageAspectFlags::COLOR,
                     extent: extent.into(),
                     access: Access::default(),
+                    timestamp: 0,
                     swapchain_index: Some(index as u32),
                     usage_flags: usages,
                     mip_level_count: 1,
@@ -101,24 +104,21 @@ impl Swapchain {
         }
     }
 
-    pub fn image_index(&self, semaphores: &mut Semaphores) -> Result<u32> {
+    pub fn image_index(&self, semaphore: vk::Semaphore) -> Result<u32> {
         let (index, _outdated) = unsafe {
-            let fence = vk::Fence::null();
             self.swapchain_loader
-                .acquire_next_image(self.swapchain, u64::MAX, semaphores.acquire, fence)
+                .acquire_next_image(self.swapchain, u64::MAX, semaphore, vk::Fence::null())
                 .map_err(Error::from)?
         };
-        semaphores.image_acquired = true;
         // TODO: Handle outdated.
         Ok(index)
     }
 
-    pub fn present(&self, device: &Device, semaphores: &Semaphores, index: u32) -> Result<()> {
-        let wait = semaphores.image_acquired.then_some(semaphores.release);
+    pub fn present(&self, device: &Device, wait: vk::Semaphore, index: u32) -> Result<()> {
         let present_info = vk::PresentInfoKHR::default()
             .image_indices(slice::from_ref(&index))
             .swapchains(slice::from_ref(&self.swapchain))
-            .wait_semaphores(wait.as_slice());
+            .wait_semaphores(slice::from_ref(&wait));
         // TODO: Handle results.
         let _result = unsafe {
             self.swapchain_loader
@@ -137,7 +137,12 @@ pub fn create_surface(
     let surface = match (display, window) {
         (RawDisplayHandle::Windows(_), RawWindowHandle::Win32(handle)) => {
             let info = vk::Win32SurfaceCreateInfoKHR::default()
-                .hinstance(handle.hinstance.ok_or(Error::NoSuitableSurface)?.get())
+                .hinstance(
+                    handle
+                        .hinstance
+                        .ok_or(Error::from(ErrorKind::NoSuitableSurface))?
+                        .get(),
+                )
                 .hwnd(handle.hwnd.get());
             let loader = khr::win32_surface::Instance::new(&instance.entry, &instance.instance);
             unsafe { loader.create_win32_surface(&info, None) }
@@ -151,20 +156,30 @@ pub fn create_surface(
         }
         (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => {
             let info = vk::XlibSurfaceCreateInfoKHR::default()
-                .dpy(display.display.ok_or(Error::NoSuitableSurface)?.as_ptr())
+                .dpy(
+                    display
+                        .display
+                        .ok_or(Error::from(ErrorKind::NoSuitableSurface))?
+                        .as_ptr(),
+                )
                 .window(window.window);
             let loader = khr::xlib_surface::Instance::new(&instance.entry, instance);
             unsafe { loader.create_xlib_surface(&info, None) }
         }
         (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => {
             let info = vk::XcbSurfaceCreateInfoKHR::default()
-                .connection(display.connection.ok_or(Error::NoSuitableSurface)?.as_ptr())
+                .connection(
+                    display
+                        .connection
+                        .ok_or(Error::from(ErrorKind::NoSuitableSurface))?
+                        .as_ptr(),
+                )
                 .window(window.window.get());
             let loader = khr::xcb_surface::Instance::new(&instance.entry, instance);
             unsafe { loader.create_xcb_surface(&info, None) }
         }
         _ => {
-            return Err(Error::NoSuitableSurface);
+            return Err(Error::from(ErrorKind::NoSuitableSurface));
         }
     };
     surface

@@ -24,7 +24,7 @@ impl PostProcess {
             ),
             binding!(
                 storage_image,
-                context.surface_format(),
+                context.surface_format()?,
                 swapchain,
                 None,
                 true
@@ -48,13 +48,14 @@ impl PostProcess {
         constants: &Handle<Buffer>,
         render_target: &Handle<Image>,
         swapchain: &Handle<Image>,
-    ) {
+    ) -> Result<()> {
         context
             .bind_shader(&self.display)
             .bind_buffer("constants", constants)
             .bind_storage_image("render_target", render_target)
             .bind_storage_image("swapchain", swapchain);
         let vk::Extent3D { width, height, .. } = context.image(swapchain).extent;
-        context.dispatch(width, height);
+        context.dispatch(width, height)?;
+        Ok(())
     }
 }

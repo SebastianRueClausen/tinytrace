@@ -1,4 +1,7 @@
-use std::ops;
+use std::{
+    mem, ops, slice,
+    time::{Duration, Instant},
+};
 
 use super::{Blas, Buffer, Context, Device, Error, Handle, Image, Result, Tlas};
 use ash::vk;
@@ -18,8 +21,8 @@ impl Access {
         write_set.intersects(self.access)
     }
 
-    // Determine the image layout based on the access flags.
-    // Assume that no flags means presenting the image, which is a bit of a hack.
+    /// Determine the image layout based on the access flags.
+    /// Assume that no flags means presenting the image, which is a bit of a hack.
     fn image_layout(&self) -> vk::ImageLayout {
         match self.access {
             vk::AccessFlags2::TRANSFER_READ => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
@@ -101,7 +104,7 @@ impl Context {
             .memory_barriers(&memory_barriers);
         unsafe {
             self.device
-                .cmd_pipeline_barrier2(self.command_buffer.buffer, &dependency_info);
+                .cmd_pipeline_barrier2(self.command_buffer().buffer, &dependency_info);
         }
     }
 
@@ -111,86 +114,172 @@ impl Context {
         buffers: &[(Handle<Buffer>, Access)],
         blases: &[(Handle<Blas>, Access)],
         tlases: &[(Handle<Tlas>, Access)],
-    ) {
+    ) -> Result<()> {
+        let next_timestamp = self.sync.timestamp + 1;
         let images: Vec<_> = images
             .iter()
             .filter(|(handle, access)| {
                 let image = self.image_mut(handle);
+                let wait =
+                    mem::replace(&mut image.timestamp, next_timestamp).min(next_timestamp - 1);
                 let has_write_dependency =
                     (access.writes() || image.access.writes()) && !image.access.access.is_empty();
                 let has_dependency = has_write_dependency || access.image_layout() != image.layout;
                 if has_dependency {
-                    image.access |= *access;
+                    image.access = Access::default();
                 }
+                image.access |= *access;
+                self.sync.add_wait_timestamp(wait);
                 has_dependency
             })
             .cloned()
             .collect();
+        let handle_access = |src: &mut Access, dst: Access| {
+            let has_dependency = (src.writes() || dst.writes()) && !src.access.is_empty();
+            if has_dependency {
+                *src = Access::default();
+            }
+            *src |= dst;
+            has_dependency.then_some((dst, *src))
+        };
         let buffers: Vec<_> = buffers
             .iter()
             .filter(|(handle, access)| {
                 let buffer = self.buffer_mut(handle);
-                let has_dependency =
-                    (access.writes() || buffer.access.writes()) && !buffer.access.access.is_empty();
-                if !has_dependency {
-                    buffer.access |= *access;
-                }
+                let wait =
+                    mem::replace(&mut buffer.timestamp, next_timestamp).min(next_timestamp - 1);
+                let has_dependency = handle_access(&mut buffer.access, *access).is_some();
+                self.sync.add_wait_timestamp(wait);
                 has_dependency
             })
             .cloned()
             .collect();
-        let structure_access = |structure: &mut Access, access: Access| {
-            let has_dependency =
-                (structure.writes() || access.writes()) && !structure.access.is_empty();
-            if has_dependency {
-                *structure = Access::default();
-            }
-            *structure |= access;
-            has_dependency.then_some((access, *structure))
-        };
         let mut memory: Vec<_> = blases
             .iter()
             .filter_map(|(handle, access)| {
-                structure_access(&mut self.blas_mut(handle).access, *access)
+                let blas = self.blas_mut(handle);
+                let dependency = handle_access(&mut blas.access, *access);
+                let wait =
+                    mem::replace(&mut blas.timestamp, next_timestamp).min(next_timestamp - 1);
+                self.sync.add_wait_timestamp(wait);
+                dependency
             })
             .collect();
         memory.extend(tlases.iter().filter_map(|(handle, access)| {
-            structure_access(&mut self.tlas_mut(handle).access, *access)
+            let tlas = self.tlas_mut(handle);
+            let dependency = handle_access(&mut tlas.access, *access);
+            let wait = mem::replace(&mut tlas.timestamp, next_timestamp).min(next_timestamp - 1);
+            self.sync.add_wait_timestamp(wait);
+            dependency
         }));
+
+        // Avoid the driver overhead of multiple of the same barriers.
         memory.sort();
         memory.dedup();
+
         self.pipeline_barriers(&images, &buffers, &memory);
+        Ok(())
     }
 }
 
-pub struct Semaphores {
-    pub acquire: vk::Semaphore,
-    pub release: vk::Semaphore,
-    /// If a swapchain image was acquired, we have to wait for it.
-    pub image_acquired: bool,
-    pub image_released: bool,
+/// The synchronization related to a frame.
+pub struct Frame {
+    /// Signaled when the swapchain is acquired.
+    pub acquired: vk::Semaphore,
+    /// Signaled when the swapchain image ready to be presented.
+    pub released: vk::Semaphore,
+    /// The timestamp of when the commands of the previous frame with this index is done executing.
+    pub present_timestamp: Option<u64>,
 }
 
-impl Semaphores {
-    pub fn new(device: &Device) -> Result<Self> {
+/// All state used for synchronization.
+pub struct Sync {
+    /// The "Frames in Flight".
+    pub frames: Vec<Frame>,
+    /// The timeline semaphore.
+    pub timeline: vk::Semaphore,
+    /// The timestamp to wait for before executing recorded commands.
+    pub wait_timestamp: u64,
+    /// The current timestamp, i.e. the one signaled when all previously submitted commands are
+    /// done executing.
+    pub timestamp: u64,
+    /// The current frame index.
+    pub frame_index: usize,
+}
+
+impl Sync {
+    pub fn new(device: &Device, frame_count: usize) -> Result<Self> {
+        let frames: Vec<_> = (0..frame_count)
+            .map(|_| {
+                Ok(Frame {
+                    acquired: create_semaphore(device, vk::SemaphoreType::BINARY)?,
+                    released: create_semaphore(device, vk::SemaphoreType::BINARY)?,
+                    present_timestamp: None,
+                })
+            })
+            .collect::<Result<_>>()?;
         Ok(Self {
-            acquire: create_semaphore(device)?,
-            release: create_semaphore(device)?,
-            image_acquired: false,
-            image_released: true,
+            timeline: create_semaphore(device, vk::SemaphoreType::TIMELINE)?,
+            wait_timestamp: 0,
+            timestamp: 0,
+            frame_index: 0,
+            frames,
         })
     }
 
-    pub fn destroy(&self, device: &Device) {
+    /// Add a timestamp to wait for before executing recorded commands.
+    fn add_wait_timestamp(&mut self, timestamp: u64) {
+        self.wait_timestamp = self.wait_timestamp.max(timestamp);
+    }
+
+    /// Wait until `timestamp` is signaled.
+    pub fn wait_for_timestamp(&self, device: &Device, timestamp: u64) -> Result<Duration> {
+        let before = Instant::now();
         unsafe {
-            device.destroy_semaphore(self.acquire, None);
-            device.destroy_semaphore(self.release, None);
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(slice::from_ref(&self.timeline))
+                .values(slice::from_ref(&timestamp));
+            device
+                .wait_semaphores(&wait_info, u64::MAX)
+                .map_err(Error::from)
+                .map(|_| before.elapsed())
+        }
+    }
+
+    /// Get the `Frame` of `back` frames ago.
+    pub fn frame(&self, back: usize) -> &Frame {
+        &self.frames[self.frame_index.wrapping_sub(back) % self.frames.len()]
+    }
+
+    /// Signal that the current frame is done.
+    pub fn advance_frame(&mut self, timestamp: u64) {
+        let frame_count = self.frames.len();
+        self.frames[self.frame_index % frame_count].present_timestamp = Some(timestamp);
+        self.frame_index += 1;
+    }
+
+    /// Advance the timestamp and reset dependencies. Returns the wait and signal timestamps.
+    pub fn advance_timestamp(&mut self) -> (u64, u64) {
+        self.timestamp += 1;
+        (mem::take(&mut self.wait_timestamp), self.timestamp)
+    }
+
+    pub fn destroy(&self, device: &Device) {
+        for frame in &self.frames {
+            unsafe {
+                device.destroy_semaphore(frame.acquired, None);
+                device.destroy_semaphore(frame.released, None);
+            }
+        }
+        unsafe {
+            device.destroy_semaphore(self.timeline, None);
         }
     }
 }
 
-fn create_semaphore(device: &Device) -> Result<vk::Semaphore> {
-    let semaphore_info = vk::SemaphoreCreateInfo::default();
+pub fn create_semaphore(device: &Device, ty: vk::SemaphoreType) -> Result<vk::Semaphore> {
+    let mut type_info = vk::SemaphoreTypeCreateInfo::default().semaphore_type(ty);
+    let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
     unsafe {
         device
             .create_semaphore(&semaphore_info, None)

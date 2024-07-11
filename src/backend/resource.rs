@@ -322,7 +322,7 @@ impl MemoryLocation {
     }
 }
 
-/// A linearly allocated contigues block of memory.
+/// A linearly allocated contiguous block of memory.
 #[derive(Debug)]
 pub struct MemoryBlock {
     memory: vk::DeviceMemory,
@@ -531,7 +531,7 @@ pub struct Blas {
 }
 
 impl Context {
-    fn blas_geoemtry(
+    fn blas_geometry(
         &self,
         request: &BlasRequest,
         vertices: Option<BufferRange>,
@@ -585,7 +585,7 @@ impl Context {
         lifetime: Lifetime,
         request: &BlasRequest,
     ) -> Result<Handle<Blas>> {
-        let geometry = self.blas_geoemtry(request, None, None);
+        let geometry = self.blas_geometry(request, None, None);
         let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
         unsafe {
             self.device
@@ -677,7 +677,7 @@ impl Context {
         let geometries: Vec<vk::AccelerationStructureGeometryKHR> = builds
             .iter()
             .map(|build| {
-                self.blas_geoemtry(
+                self.blas_geometry(
                     &self.blas(&build.blas).request,
                     Some(build.vertices.clone()),
                     // Indices are offset in `AccelerationStructureBuildRangeInfoKHR` instead.

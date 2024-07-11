@@ -1,5 +1,5 @@
 use std::{
-    mem, ops, slice,
+    ops, slice,
     time::{Duration, Instant},
 };
 
@@ -120,16 +120,14 @@ impl Context {
             .iter()
             .filter(|(handle, access)| {
                 let image = self.image_mut(handle);
-                let wait =
-                    mem::replace(&mut image.timestamp, next_timestamp).min(next_timestamp - 1);
                 let has_write_dependency =
                     (access.writes() || image.access.writes()) && !image.access.access.is_empty();
                 let has_dependency = has_write_dependency || access.image_layout() != image.layout;
                 if has_dependency {
                     image.access = Access::default();
                 }
+                image.timestamp = next_timestamp;
                 image.access |= *access;
-                self.sync.add_wait_timestamp(wait);
                 has_dependency
             })
             .cloned()
@@ -146,11 +144,8 @@ impl Context {
             .iter()
             .filter(|(handle, access)| {
                 let buffer = self.buffer_mut(handle);
-                let wait =
-                    mem::replace(&mut buffer.timestamp, next_timestamp).min(next_timestamp - 1);
-                let has_dependency = handle_access(&mut buffer.access, *access).is_some();
-                self.sync.add_wait_timestamp(wait);
-                has_dependency
+                buffer.timestamp = next_timestamp;
+                handle_access(&mut buffer.access, *access).is_some()
             })
             .cloned()
             .collect();
@@ -158,19 +153,14 @@ impl Context {
             .iter()
             .filter_map(|(handle, access)| {
                 let blas = self.blas_mut(handle);
-                let dependency = handle_access(&mut blas.access, *access);
-                let wait =
-                    mem::replace(&mut blas.timestamp, next_timestamp).min(next_timestamp - 1);
-                self.sync.add_wait_timestamp(wait);
-                dependency
+                blas.timestamp = next_timestamp;
+                handle_access(&mut blas.access, *access)
             })
             .collect();
         memory.extend(tlases.iter().filter_map(|(handle, access)| {
             let tlas = self.tlas_mut(handle);
-            let dependency = handle_access(&mut tlas.access, *access);
-            let wait = mem::replace(&mut tlas.timestamp, next_timestamp).min(next_timestamp - 1);
-            self.sync.add_wait_timestamp(wait);
-            dependency
+            tlas.timestamp = next_timestamp;
+            handle_access(&mut tlas.access, *access)
         }));
 
         // Avoid the driver overhead of multiple of the same barriers.
@@ -198,8 +188,6 @@ pub struct Sync {
     pub frames: Vec<Frame>,
     /// The timeline semaphore.
     pub timeline: vk::Semaphore,
-    /// The timestamp to wait for before executing recorded commands.
-    pub wait_timestamp: u64,
     /// The current timestamp, i.e. the one signaled when all previously submitted commands are
     /// done executing.
     pub timestamp: u64,
@@ -220,16 +208,10 @@ impl Sync {
             .collect::<Result<_>>()?;
         Ok(Self {
             timeline: create_semaphore(device, vk::SemaphoreType::TIMELINE)?,
-            wait_timestamp: 0,
             timestamp: 0,
             frame_index: 0,
             frames,
         })
-    }
-
-    /// Add a timestamp to wait for before executing recorded commands.
-    fn add_wait_timestamp(&mut self, timestamp: u64) {
-        self.wait_timestamp = self.wait_timestamp.max(timestamp);
     }
 
     /// Wait until `timestamp` is signaled.
@@ -256,12 +238,6 @@ impl Sync {
         let frame_count = self.frames.len();
         self.frames[self.frame_index % frame_count].present_timestamp = Some(timestamp);
         self.frame_index += 1;
-    }
-
-    /// Advance the timestamp and reset dependencies. Returns the wait and signal timestamps.
-    pub fn advance_timestamp(&mut self) -> (u64, u64) {
-        self.timestamp += 1;
-        (mem::take(&mut self.wait_timestamp), self.timestamp)
     }
 
     pub fn destroy(&self, device: &Device) {

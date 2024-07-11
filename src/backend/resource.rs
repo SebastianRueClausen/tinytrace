@@ -958,6 +958,7 @@ const STRUCTURE_SRC_ACCESS: Access = Access {
     // Not an error, this is actually what the spec say.
     access: vk::AccessFlags2::SHADER_READ,
 };
+
 const STRUCTURE_DST_ACCESS: Access = Access {
     stage: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
     access: vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR,

@@ -92,7 +92,7 @@ impl Pool {
         }
     }
 
-    fn clear(&mut self, semaphores: &Sync, device: &Device) -> Result<()> {
+    fn clear(&mut self, sync: &Sync, device: &Device) -> Result<()> {
         macro_rules! timestamp {
             ($item:ident) => {
                 self.$item.iter().map(|b| b.timestamp).max().unwrap_or(0)
@@ -104,7 +104,7 @@ impl Pool {
             timestamp!(blases),
             timestamp!(tlases),
         ];
-        semaphores.wait_for_timestamp(device, timestamps.into_iter().max().unwrap_or(0))?;
+        sync.wait_for_timestamp(device, timestamps.into_iter().max().unwrap_or(0))?;
         macro_rules! drain {
             ($($item:ident), *) => {
                 $(self.$item.drain(..).for_each(|b| b.destroy(device));)*
@@ -294,13 +294,17 @@ impl Context {
 
     /// Executes all recorded commands. Returns the timestamp signaled when when done.
     pub fn execute_commands(&mut self, present: bool) -> Result<u64> {
-        let (wait, signal) = self.sync.advance_timestamp();
-
         let command_buffer = self.command_buffers.first_mut().unwrap();
-        command_buffer.end(&self.device, signal)?;
+        command_buffer.end(&self.device, self.sync.timestamp + 1)?;
 
-        let mut wait = vec![semaphore_submit_info(self.sync.timeline, wait)];
-        let mut signal = vec![semaphore_submit_info(self.sync.timeline, signal)];
+        let mut wait = vec![semaphore_submit_info(
+            self.sync.timeline,
+            self.sync.timestamp,
+        )];
+        let mut signal = vec![semaphore_submit_info(
+            self.sync.timeline,
+            self.sync.timestamp + 1,
+        )];
 
         // If we are about to present, we wait for the swapchain image to be
         // acquired and signal when it is "released", meaning all commands are
@@ -329,6 +333,7 @@ impl Context {
         // buffer, so all command buffer local data most be reset.
         self.pools.values_mut().for_each(Pool::clear_accesses);
         self.bound_shader = None;
+        self.sync.timestamp += 1;
 
         self.begin_next_command_buffer()?;
 

@@ -3,7 +3,6 @@
 //! The Vulkan backend of tinytrace. It is written to both be a simple implementation and be
 //! simple to use. It makes a few compromises to make this possible:
 //! * Only use compute shaders.
-//! * Only use a single command buffer.
 //! * Somewhat naive synchronization.
 //! * Limited use of buffers and images.
 //!
@@ -275,6 +274,10 @@ impl Context {
 
     pub fn surface_format(&self) -> Result<vk::Format> {
         self.swapchain().map(|(swapchain, _)| swapchain.format)
+    }
+
+    pub fn frame_index(&self) -> usize {
+        self.sync.frame_index
     }
 
     /// Add shader include. This allows shaders to include this using `path`.

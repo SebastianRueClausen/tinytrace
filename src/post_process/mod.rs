@@ -35,7 +35,7 @@ impl PostProcess {
             &ShaderRequest {
                 block_size: vk::Extent2D::default().width(32).height(32),
                 source: include_str!("display.glsl"),
-                includes: &["tonemap", "types"],
+                includes: &["tonemap", "scene"],
                 bindings,
             },
         )?;

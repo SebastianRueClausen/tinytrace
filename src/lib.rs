@@ -44,6 +44,10 @@ impl Renderer {
     ) -> Result<Self> {
         let scene = asset::Scene::default();
         let mut context = Context::new(window, extent)?;
+        context.add_include("constants", include_str!("includes/constants.glsl").into());
+        context.add_include("brdf", include_str!("includes/brdf.glsl").into());
+        context.add_include("scene", include_str!("includes/scene.glsl").into());
+
         let render_target = context.create_image(
             Lifetime::Surface,
             &ImageRequest {
@@ -98,9 +102,11 @@ impl Renderer {
         let (view, proj) = (self.camera.view(), self.camera.proj());
         let proj_view = proj * view;
         let constants = Constants {
+            frame_index: self.context.frame_index() as u32,
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             camera_position: self.camera.position.extend(0.0),
+            ray_matrix: self.camera.ray_matrix(),
             screen_size: UVec2 {
                 x: self.extent.width,
                 y: self.extent.width,
@@ -158,9 +164,11 @@ struct Constants {
     proj_view: Mat4,
     inverse_view: Mat4,
     inverse_proj: Mat4,
+    ray_matrix: Mat4,
     camera_position: Vec4,
     screen_size: UVec2,
-    padding: UVec2,
+    frame_index: u32,
+    padding: u32,
 }
 
 const RENDER_TARGET_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;

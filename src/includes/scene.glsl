@@ -1,6 +1,4 @@
-
-const float16_t TAU = 6.283185307179586hf;
-const float16_t PI = 3.1415926535897932hf;
+#include "constants"
 
 struct Vertex {
     f16vec2 texcoord;
@@ -84,19 +82,5 @@ struct Instance {
     f16mat4 normal_transform;
     uint vertex_offset, index_offset, color_offset, material;
 };
-
-struct Constants {
-    mat4 view, proj, proj_view, inverse_view, inverse_proj;
-    vec4 camera_position;
-    uvec2 screen_size;
-};
-
-vec3 create_camera_ray(vec2 ndc, mat4 inverse_proj, mat4 inverse_view) {
-    vec4 point = vec4(ndc * vec2(1.0, -1.0), 1.0, 1.0);
-    vec4 view_space_point = inverse_proj * point;
-    view_space_point.w = 0.0; 
-    vec3 world_space_point = (inverse_view * view_space_point).xyz;
-    return normalize(world_space_point);
-}
 
 const uint INVALID_INDEX = 4294967295;

@@ -32,14 +32,12 @@ impl Integrator {
             binding!(sampled_image, textures, Some(scene.textures.len() as u32)),
         ];
 
-        context.add_include("types", include_str!("types.glsl").into());
-
         let integrate = context.create_shader(
             Lifetime::Scene,
             &ShaderRequest {
                 block_size: vk::Extent2D::default().width(32).height(32),
                 source: include_str!("integrate.glsl"),
-                includes: &["types"],
+                includes: &["scene", "brdf"],
                 bindings,
             },
         )?;

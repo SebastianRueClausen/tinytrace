@@ -47,6 +47,9 @@ impl Renderer {
         context.add_include("constants", include_str!("includes/constants.glsl").into());
         context.add_include("brdf", include_str!("includes/brdf.glsl").into());
         context.add_include("scene", include_str!("includes/scene.glsl").into());
+        context.add_include("math", include_str!("includes/math.glsl").into());
+        context.add_include("random", include_str!("includes/random.glsl").into());
+        context.add_include("sample", include_str!("includes/sample.glsl").into());
 
         let render_target = context.create_image(
             Lifetime::Surface,
@@ -106,7 +109,6 @@ impl Renderer {
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             camera_position: self.camera.position.extend(0.0),
-            ray_matrix: self.camera.ray_matrix(),
             screen_size: UVec2 {
                 x: self.extent.width,
                 y: self.extent.width,
@@ -164,7 +166,6 @@ struct Constants {
     proj_view: Mat4,
     inverse_view: Mat4,
     inverse_proj: Mat4,
-    ray_matrix: Mat4,
     camera_position: Vec4,
     screen_size: UVec2,
     frame_index: u32,

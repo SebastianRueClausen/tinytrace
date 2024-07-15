@@ -1,5 +1,5 @@
 use std::{
-    ops, slice,
+    mem, ops, slice,
     time::{Duration, Instant},
 };
 
@@ -63,12 +63,11 @@ impl Context {
                     .dst_access_mask(access.access)
                     .src_stage_mask(image.access.stage)
                     .dst_stage_mask(access.stage)
-                    .old_layout(image.layout)
+                    .old_layout(mem::replace(&mut image.layout, access.image_layout()))
                     .new_layout(access.image_layout())
                     .image(image.image)
                     .subresource_range(subresource_range);
                 image.access = *access;
-                image.layout = access.image_layout();
                 barrier
             })
             .collect();

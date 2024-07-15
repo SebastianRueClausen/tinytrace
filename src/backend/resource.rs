@@ -265,6 +265,14 @@ pub fn format_info(format: vk::Format) -> FormatInfo {
             block_extent: vk::Extent2D::default().width(1).height(1),
             bytes_per_block: 16,
         },
+        vk::Format::BC5_UNORM_BLOCK => FormatInfo {
+            block_extent: vk::Extent2D::default().width(4).height(4),
+            bytes_per_block: 16,
+        },
+        vk::Format::BC1_RGBA_SRGB_BLOCK | vk::Format::BC1_RGB_SRGB_BLOCK => FormatInfo {
+            block_extent: vk::Extent2D::default().width(4).height(4),
+            bytes_per_block: 8,
+        },
         _ => {
             panic!("unsupported format");
         }
@@ -425,7 +433,8 @@ impl Allocator {
                 },
             ))
         } else {
-            let block = create_block()?;
+            let mut block = create_block()?;
+            block.offset = requirements.size;
             let output = (
                 block.memory,
                 MemoryIndex {

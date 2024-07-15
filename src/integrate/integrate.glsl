@@ -1,26 +1,9 @@
 
-
-float16_t random(inout uint seed) {
-    seed = seed * 747796405 + 1;
-    uint word = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
-    word = (word >> 22) ^ word;
-    return float16_t(float(word) / 4294967295.0f);
-}
-
-uint initial_seed(uint x, uint y, uint frame) {
-    uint seed = (x * 2654435769u) ^ (y * 2654435769u) ^ (frame * 2654435769u);
-    seed = (seed ^ (seed >> 16u)) * 2654435769u;
-    return seed;
-}
-
 struct RayHit {
     vec3 world_position;
-    f16vec3 normal;
-    f16vec3 tangent;
-    f16vec3 bitangent;
-    f16vec2 texcoord;
-    f16vec2 texcoord_ddx, texcoord_ddy;
-    f16vec4 color;
+    Basis tangent_space;
+    vec2 texcoord, texcoord_ddx, texcoord_ddy;
+    vec4 color;
     int instance;
 };
 
@@ -39,7 +22,7 @@ struct Ray {
 };
 
 // Returns the barycentric coordinates of ray triangle intersection.
-f16vec3 triangle_intersection(vec3 triangle[3], Ray ray) {
+vec3 triangle_intersection(vec3 triangle[3], Ray ray) {
     vec3 edge_to_origin = ray.origin - triangle[0];
     vec3 edge_2 = triangle[2] - triangle[0];
     vec3 edge_1 = triangle[1] - triangle[0];
@@ -50,7 +33,7 @@ f16vec3 triangle_intersection(vec3 triangle[3], Ray ray) {
     float v2 = dot(s, ray.direction);
     float b = v1 * inverse_det;
     float c = v2 * inverse_det;
-    return f16vec3(vec3(1.0 - b - c, b, c));
+    return vec3(1.0 - b - c, b, c);
 }
 
 vec3 camera_ray_direction(vec2 ndc) {
@@ -72,7 +55,7 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         positions[i] = (instance.transform * vec4(positions[i], 1.0)).xyz;
     }
 
-    uint base_index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    uint base_index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(query, true) + instance.index_offset;
     uvec3 triangle_indices = uvec3(
         indices[base_index + 0],
         indices[base_index + 1],
@@ -85,9 +68,8 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         vertices[triangle_indices[2]]
     );
 
-    f16vec3 barycentric
-        = f16vec3(0.0hf, f16vec2(rayQueryGetIntersectionBarycentricsEXT(query, true)));
-    barycentric.x = 1.0hf - barycentric.y - barycentric.z;
+    vec3 barycentric = vec3(0.0, rayQueryGetIntersectionBarycentricsEXT(query, true));
+    barycentric.x = 1.0 - barycentric.y - barycentric.z;
 
     TangentFrame tangent_frames[3] = TangentFrame[3](
         decode_tangent_frame(triangle_vertices[0].tangent_frame),
@@ -95,30 +77,34 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         decode_tangent_frame(triangle_vertices[2].tangent_frame)
     );
 
-    f16mat3 normal_transform = f16mat3(instance.normal_transform);
-    hit.normal = barycentric.x * (normal_transform * tangent_frames[0].normal)
-        + barycentric.y * (normal_transform * tangent_frames[1].normal)
-        + barycentric.z * (normal_transform * tangent_frames[2].normal);
-    hit.tangent = barycentric.x * (normal_transform * tangent_frames[0].tangent)
-        + barycentric.y * (normal_transform * tangent_frames[1].tangent)
-        + barycentric.z * (normal_transform * tangent_frames[2].tangent);
-    float16_t bitangent_sign = sign(dot(barycentric, f16vec3(
+    mat3 normal_transform = mat3(instance.normal_transform);
+    hit.tangent_space.normal = normalize(barycentric.x * tangent_frames[0].normal
+        + barycentric.y * tangent_frames[1].normal
+        + barycentric.z * tangent_frames[2].normal);
+    hit.tangent_space.tangent = normalize(barycentric.x * tangent_frames[0].tangent
+        + barycentric.y * tangent_frames[1].tangent
+        + barycentric.z * tangent_frames[2].tangent);
+    hit.tangent_space.normal = normalize(normal_transform * hit.tangent_space.normal);
+    hit.tangent_space.tangent = normalize(normal_transform * hit.tangent_space.tangent);
+
+    float bitangent_sign = sign(dot(barycentric, vec3(
         tangent_frames[0].bitangent_sign,
         tangent_frames[1].bitangent_sign,
         tangent_frames[2].bitangent_sign
     )));
-    hit.bitangent = bitangent_sign * cross(hit.normal, hit.tangent);
+    hit.tangent_space.bitangent
+        = normalize(bitangent_sign * cross(hit.tangent_space.normal, hit.tangent_space.tangent));
 
-    hit.texcoord = barycentric.x * triangle_vertices[0].texcoord
-        + barycentric.y * triangle_vertices[1].texcoord
-        + barycentric.z * triangle_vertices[2].texcoord;
+    hit.texcoord = barycentric.x * vec2(triangle_vertices[0].texcoord)
+        + barycentric.y * vec2(triangle_vertices[1].texcoord)
+        + barycentric.z * vec2(triangle_vertices[2].texcoord);
 
     hit.world_position = barycentric.x * positions[0]
         + barycentric.y * positions[1]
         + barycentric.z * positions[2];
 
     // Calculate the differentials of the texture coordinates using ray
-    // differentials if it is the first bounce.
+    // differentials if it's the first bounce.
     if (bounce == 0) {
         vec2 texel_size = 2.0 / vec2(constants.screen_size);
 
@@ -126,36 +112,31 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         ray.origin = rayQueryGetWorldRayOriginEXT(query);
 
         ray.direction = camera_ray_direction(vec2(ndc.x + texel_size.x, ndc.y));
-        f16vec3 hx = triangle_intersection(positions, ray);
+        vec3 hx = triangle_intersection(positions, ray);
 
         ray.direction = camera_ray_direction(vec2(ndc.x, ndc.y + texel_size.y));
-        f16vec3 hy = triangle_intersection(positions, ray);
+        vec3 hy = triangle_intersection(positions, ray);
 
-        f16vec3 ddx = barycentric - hx;
-        f16vec3 ddy = barycentric - hy;
+        vec3 ddx = barycentric - hx;
+        vec3 ddy = barycentric - hy;
 
-        hit.texcoord_ddx = ddx.x * triangle_vertices[0].texcoord
-            + ddx.y * triangle_vertices[1].texcoord
-            + ddx.z * triangle_vertices[2].texcoord;
-        hit.texcoord_ddy = ddy.x * triangle_vertices[0].texcoord
-            + ddy.y * triangle_vertices[1].texcoord
-            + ddy.z * triangle_vertices[2].texcoord;
+        hit.texcoord_ddx = ddx.x * vec2(triangle_vertices[0].texcoord)
+            + ddx.y * vec2(triangle_vertices[1].texcoord)
+            + ddx.z * vec2(triangle_vertices[2].texcoord);
+        hit.texcoord_ddy = ddy.x * vec2(triangle_vertices[0].texcoord)
+            + ddy.y * vec2(triangle_vertices[1].texcoord)
+            + ddy.z * vec2(triangle_vertices[2].texcoord);
     }
 
     if (instance.color_offset != INVALID_INDEX) {
-        hit.color = barycentric.x * get_vertex_color(instance.color_offset + (triangle_indices[0] - instance.vertex_offset) * 4)
-            + barycentric.y * get_vertex_color(instance.color_offset + (triangle_indices[1] - instance.vertex_offset) * 4)
-            + barycentric.z * get_vertex_color(instance.color_offset + (triangle_indices[2] - instance.vertex_offset) * 4);
+        hit.color = barycentric.x * vec4(get_vertex_color(instance.color_offset + (triangle_indices[0] - instance.vertex_offset) * 4))
+            + barycentric.y * vec4(get_vertex_color(instance.color_offset + (triangle_indices[1] - instance.vertex_offset) * 4))
+            + barycentric.z * vec4(get_vertex_color(instance.color_offset + (triangle_indices[2] - instance.vertex_offset) * 4));
     } else {
-        hit.color = f16vec4(1.0hf);
+        hit.color = vec4(1.0f);
     }
 
     return hit;
-}
-
-// Use Gram-Schmidt to find a vector orthonormal to the normal most like the surface tangent.
-f16vec3 world_space_tangent(f16vec3 normal, f16vec3 surface_tangent) {
-    return normalize(surface_tangent - normal * dot(normal, surface_tangent));
 }
 
 bool trace_ray(Ray ray, uint bounce, vec2 ndc, out RayHit hit) {
@@ -187,13 +168,18 @@ void main() {
         return;
     }
 
-    uint seed = (pixel_index.x + pixel_index.y * constants.screen_size.y) * 100;
+    Generator generator;
+    generator.state = hash(gl_GlobalInvocationID.x
+        + gl_GlobalInvocationID.y * gl_NumWorkGroups.x
+        + gl_GlobalInvocationID.z * gl_NumWorkGroups.x * gl_NumWorkGroups.y
+    );
+
     vec2 ndc = (vec2(pixel_index) / vec2(constants.screen_size)) * 2.0 - 1.0;
 
-    f16vec3 accumulated = f16vec3(0.0hf);
+    vec3 accumulated = vec3(0.0);
 
     for (uint sample_index = 0; sample_index < SAMPLE_COUNT; sample_index++) {
-        f16vec3 attenuation = f16vec3(1.0hf);
+        vec3 attenuation = vec3(1.0);
 
         Ray ray;
         RayHit hit;
@@ -211,39 +197,36 @@ void main() {
                 Instance instance = instances[hit.instance];
                 Material material = materials[instance.material];
 
-                vec2 texcoord = vec2(hit.texcoord);
-
                 // Calculate the mip level using standard GLSL method.
                 if (bounce == 0) {
-                    hit.texcoord_ddx *= f16vec2(vec2(constants.screen_size));
-                    hit.texcoord_ddy *= f16vec2(vec2(constants.screen_size));
-                    float16_t max_length_sqr =
+                    hit.texcoord_ddx *= vec2(constants.screen_size);
+                    hit.texcoord_ddy *= vec2(constants.screen_size);
+                    float max_length_sqr =
                         max(dot(hit.texcoord_ddx, hit.texcoord_ddx), dot(hit.texcoord_ddy, hit.texcoord_ddy));
-                    mip_level = float(0.5hf * log2(max_length_sqr));
+                    mip_level = 0.5 * log2(max_length_sqr);
                 }
 
-                f16vec3 tangent_normal = octahedron_decode(
-                    f16vec2(textureLod(textures[material.normal_texture], texcoord, mip_level).xy)
+                vec3 tangent_space_normal = octahedron_decode(
+                    textureLod(textures[material.normal_texture], hit.texcoord, mip_level).xy
                 );
-                f16vec3 normal = normalize(
-                    tangent_normal.x * hit.tangent
-                        + tangent_normal.y * hit.bitangent
-                        + tangent_normal.z * hit.normal
-                );
-                f16vec3 tangent = world_space_tangent(normal, hit.tangent);
+
+                Basis surface_basis;
+                surface_basis.normal = transform_to_basis(hit.tangent_space, tangent_space_normal);
+                surface_basis.tangent = gram_schmidt(surface_basis.normal, hit.tangent_space.tangent);
+                surface_basis.bitangent = normalize(cross(surface_basis.normal, surface_basis.tangent));
 
                 // Surface Properties.
                 SurfaceProperties surface;
 
-                f16vec4 albedo = f16vec4(textureLod(textures[material.albedo_texture], texcoord, mip_level));
-                albedo *= f16vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
+                vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level);
+                albedo *= vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
                 albedo *= hit.color;
 
                 surface.albedo = albedo.rgb;
 
-                f16vec2 specular = f16vec2(textureLod(textures[material.specular_texture], texcoord, mip_level).rg);
-                f16vec3 emissive = f16vec3(textureLod(textures[material.emissive_texture], texcoord, mip_level).rgb);
-                emissive *= f16vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
+                vec2 specular = textureLod(textures[material.specular_texture], hit.texcoord, mip_level).rg;
+                vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, mip_level).rgb;
+                emissive *= vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
 
                 surface.metallic = specular.r * material.metallic;
                 surface.roughness = specular.g * material.roughness;
@@ -252,32 +235,27 @@ void main() {
                 // Heuristic for mip level.
                 mip_level += float(surface.roughness);
 
-                float16_t dielectric_specular = (material.ior - 1.0hf) / (material.ior + 1.0hf);
+                float dielectric_specular = (material.ior - 1.0) / (material.ior + 1.0);
                 dielectric_specular *= dielectric_specular;
-                surface.fresnel_min = mix(f16vec3(dielectric_specular), surface.albedo, surface.metallic);
-                surface.fresnel_max = clamp(dot(surface.fresnel_min, f16vec3(50.0hf * 0.33hf)), 0.0hf, 1.0hf);
+                surface.fresnel_min = mix(vec3(dielectric_specular), surface.albedo, surface.metallic);
+                surface.fresnel_max = clamp(dot(surface.fresnel_min, vec3(50.0 * 0.33)), 0.0, 1.0);
 
-                surface.view_direction = f16vec3(normalize(ray.origin - hit.world_position));
-                surface.normal_dot_view = clamp(dot(normal, surface.view_direction), 0.0001hf, 1.0hf);
+                surface.view_direction = normalize(ray.origin - hit.world_position);
+                surface.normal_dot_view = clamp(dot(surface_basis.normal, surface.view_direction), 0.0001, 1.0);
 
-                // Find bounce direction (Uniform hemisphere sampling).
-                float16_t theta = PI * 2.0hf * random(seed);
-                float16_t u = 2.0hf * random(seed) - 1.0hf;
-                float16_t r = sqrt(1.0hf - u * u);
-                ray.direction = normalize(normal + f16vec3(r * cos(theta), r * sin(theta), u));
-                ray.origin = hit.world_position + 0.0001 * normal;
-
-                float16_t pdf = 1.0hf / (2.0hf * PI);
+                ray.direction = transform_to_basis(surface_basis, cosine_hemisphere_sample(generator));
+                ray.origin = hit.world_position + 0.0001 * surface_basis.normal;
 
                 // Scatter Properties.
                 ScatterProperties scatter;
-                scatter.direction = f16vec3(ray.direction);
+                scatter.direction = ray.direction;
                 scatter.half_vector = normalize(surface.view_direction + scatter.direction);
-                scatter.normal_dot_half = normalize(dot(normal, scatter.half_vector));
-                scatter.normal_dot_scatter = normalize(dot(normal, scatter.direction));
+                scatter.normal_dot_half = normalize(dot(surface_basis.normal, scatter.half_vector));
+                scatter.normal_dot_scatter = normalize(dot(surface_basis.normal, scatter.direction));
                 scatter.view_dot_half = normalize(dot(surface.view_direction, scatter.half_vector));
 
-                f16vec3 brdf = ggx_specular(surface, scatter) + lambert_diffuse(surface);
+                vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
+                float pdf = cosine_hemisphere_pdf(scatter.normal_dot_scatter);
 
                 accumulated += emissive * attenuation; 
                 attenuation *= (brdf * abs(scatter.normal_dot_scatter)) / pdf;
@@ -285,6 +263,6 @@ void main() {
         }
     }
 
-    accumulated /= float16_t(SAMPLE_COUNT);
-    imageStore(target, ivec2(pixel_index), vec4(f16vec4(accumulated, 1.0hf)));
+    accumulated /= float(SAMPLE_COUNT);
+    imageStore(target, ivec2(pixel_index), vec4(accumulated, 1.0));
 }

@@ -98,10 +98,11 @@ impl Context {
                 write
                     .mips
                     .iter()
-                    .map(|mip| mip.len().next_multiple_of(CHUNK_ALIGNMENT) as u64)
+                    .map(|mip| mip.len().next_multiple_of(CHUNK_ALIGNMENT) as vk::DeviceSize)
             })
             .sum();
         let (scratch, mapping) = self.get_scratch(scratch_size)?;
+        assert_eq!(mapping.align_offset(CHUNK_ALIGNMENT), 0);
         writes
             .iter()
             .flat_map(|write| write.mips.iter())
@@ -126,12 +127,11 @@ impl Context {
                     let image = self.image(&image);
                     let image_copy =
                         buffer_image_copy(image.aspect, level, buffer_offset, offset, extent);
-                    let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     self.device.cmd_copy_buffer_to_image(
                         self.command_buffer().buffer,
                         self.buffer(&scratch).buffer,
                         image.image,
-                        layout,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         &[image_copy],
                     );
                     buffer_offset + data.len().next_multiple_of(CHUNK_ALIGNMENT) as vk::DeviceSize

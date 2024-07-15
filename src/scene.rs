@@ -2,7 +2,6 @@ use std::mem;
 
 use ash::vk;
 use glam::{Mat4, Quat, Vec3};
-use half::f16;
 
 use crate::asset;
 use crate::backend::resource::{BlasBuild, BlasRequest, BufferRange, TlasInstance};
@@ -149,21 +148,17 @@ struct Object {
 impl Object {
     fn instance(&self, mesh: &asset::Mesh) -> Instance {
         let asset::BoundingSphere { radius, center } = mesh.bounding_sphere;
-        let transform =
-            Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
+        let transform = self.transform
+            * Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
+        let inverse_transform = transform.inverse();
         Instance {
-            transform: self.transform * transform,
-            invese_transform: self.transform.inverse(),
-            normal_transform: self
-                .transform
-                .inverse()
-                .transpose()
-                .to_cols_array()
-                .map(f16::from_f32),
+            normal_transform: self.transform.inverse().transpose(),
             material: self.material,
             vertex_offset: mesh.vertex_offset,
-            index_offset: mesh.index_count,
+            index_offset: mesh.index_offset,
             color_offset: mesh.color_offset,
+            inverse_transform,
+            transform,
         }
     }
 
@@ -258,8 +253,8 @@ fn create_texture(context: &mut Context, texture: &asset::Texture) -> Result<Han
 #[derive(bytemuck::NoUninit, Debug, Clone, Copy)]
 struct Instance {
     transform: Mat4,
-    invese_transform: Mat4,
-    normal_transform: [f16; 4 * 4],
+    inverse_transform: Mat4,
+    normal_transform: Mat4,
     vertex_offset: u32,
     index_offset: u32,
     color_offset: u32,

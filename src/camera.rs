@@ -61,14 +61,6 @@ impl Camera {
         )
         .normalize();
     }
-
-    pub fn ray_matrix(&self) -> Mat4 {
-        let mut ray_matrix = self.proj() * self.view();
-        ray_matrix.col_mut(3)[0] = 0.0;
-        ray_matrix.col_mut(3)[1] = 0.0;
-        ray_matrix.col_mut(3)[2] = 0.0;
-        ray_matrix.inverse()
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

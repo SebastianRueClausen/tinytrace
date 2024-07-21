@@ -160,7 +160,7 @@ bool trace_ray(Ray ray, uint bounce, vec2 ndc, out RayHit hit) {
 }
 
 const uint SAMPLE_COUNT = 4;
-const uint BOUNCE_COUNT = 4;
+const uint BOUNCE_COUNT = 6;
 
 void main() {
     uvec2 pixel_index = gl_GlobalInvocationID.xy;
@@ -168,12 +168,7 @@ void main() {
         return;
     }
 
-    Generator generator;
-    generator.state = hash(gl_GlobalInvocationID.x
-        + gl_GlobalInvocationID.y * gl_NumWorkGroups.x
-        + gl_GlobalInvocationID.z * gl_NumWorkGroups.x * gl_NumWorkGroups.y
-    );
-
+    Generator generator = init_generator(pixel_index, constants.screen_size, constants.frame_index);
     vec2 ndc = (vec2(pixel_index) / vec2(constants.screen_size)) * 2.0 - 1.0;
 
     vec3 accumulated = vec3(0.0);
@@ -181,11 +176,8 @@ void main() {
     for (uint sample_index = 0; sample_index < SAMPLE_COUNT; sample_index++) {
         vec3 attenuation = vec3(1.0);
 
-        Ray ray;
         RayHit hit;
-
-        ray.direction = camera_ray_direction(ndc);
-        ray.origin = constants.camera_position.xyz;
+        Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
 
         float mip_level;
 
@@ -197,7 +189,7 @@ void main() {
                 Instance instance = instances[hit.instance];
                 Material material = materials[instance.material];
 
-                // Calculate the mip level using standard GLSL method.
+                // Calculate the mip level using the standard GLSL method.
                 if (bounce == 0) {
                     hit.texcoord_ddx *= vec2(constants.screen_size);
                     hit.texcoord_ddy *= vec2(constants.screen_size);
@@ -215,7 +207,6 @@ void main() {
                 surface_basis.tangent = gram_schmidt(surface_basis.normal, hit.tangent_space.tangent);
                 surface_basis.bitangent = normalize(cross(surface_basis.normal, surface_basis.tangent));
 
-                // Surface Properties.
                 SurfaceProperties surface;
 
                 vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level);
@@ -224,40 +215,49 @@ void main() {
 
                 surface.albedo = albedo.rgb;
 
-                vec2 specular = textureLod(textures[material.specular_texture], hit.texcoord, mip_level).rg;
+                vec2 metallic_roughness = textureLod(textures[material.specular_texture], hit.texcoord, mip_level).rg;
                 vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, mip_level).rgb;
                 emissive *= vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
 
-                surface.metallic = specular.r * material.metallic;
-                surface.roughness = specular.g * material.roughness;
+                surface.metallic = metallic_roughness.r * material.metallic;
+                surface.roughness = metallic_roughness.g * material.roughness;
                 surface.roughness *= surface.roughness;
 
                 // Heuristic for mip level.
-                mip_level += float(surface.roughness);
+                mip_level += surface.roughness;
 
                 float dielectric_specular = (material.ior - 1.0) / (material.ior + 1.0);
                 dielectric_specular *= dielectric_specular;
                 surface.fresnel_min = mix(vec3(dielectric_specular), surface.albedo, surface.metallic);
-                surface.fresnel_max = clamp(dot(surface.fresnel_min, vec3(50.0 * 0.33)), 0.0, 1.0);
+                surface.fresnel_max = 1.0;
 
                 surface.view_direction = normalize(ray.origin - hit.world_position);
                 surface.normal_dot_view = clamp(dot(surface_basis.normal, surface.view_direction), 0.0001, 1.0);
 
-                ray.direction = transform_to_basis(surface_basis, cosine_hemisphere_sample(generator));
+                vec3 local_scatter, local_half_vector;
+                vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
+                if (random_float(generator) > surface.metallic) {
+                    local_scatter = cosine_hemisphere_sample(generator);
+                    local_half_vector = normalize(local_scatter + local_view);
+                } else {
+                    local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+                }
+
+                ray.direction = transform_to_basis(surface_basis, local_scatter);
                 ray.origin = hit.world_position + 0.0001 * surface_basis.normal;
 
-                // Scatter Properties.
                 ScatterProperties scatter;
                 scatter.direction = ray.direction;
                 scatter.half_vector = normalize(surface.view_direction + scatter.direction);
-                scatter.normal_dot_half = normalize(dot(surface_basis.normal, scatter.half_vector));
-                scatter.normal_dot_scatter = normalize(dot(surface_basis.normal, scatter.direction));
-                scatter.view_dot_half = normalize(dot(surface.view_direction, scatter.half_vector));
+                scatter.normal_dot_half = saturate(dot(surface_basis.normal, scatter.half_vector));
+                scatter.normal_dot_scatter = saturate(dot(surface_basis.normal, scatter.direction));
+                scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
 
                 vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
-                float pdf = cosine_hemisphere_pdf(scatter.normal_dot_scatter);
+                float pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
+                    + (1.0 - surface.metallic) * cosine_hemisphere_pdf(scatter.normal_dot_scatter);
 
-                accumulated += emissive * attenuation; 
+                accumulated += emissive * attenuation;
                 attenuation *= (brdf * abs(scatter.normal_dot_scatter)) / pdf;
             }
         }

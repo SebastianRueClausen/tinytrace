@@ -1,17 +1,12 @@
 #ifndef RANDOM
 #define RANDOM
 
-float random(inout uint seed) {
-    seed = seed * 747796405 + 1;
-    uint word = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
-    word = (word >> 22) ^ word;
-    return float(word) / 4294967295.0f;
-}
-
-uint hash(uint x) {
-    x = ((x >> 16) ^ x) * 0x45d9f3b;
-    x = ((x >> 16) ^ x) * 0x45d9f3b;
-    x = (x >> 16) ^ x;
+uint jenkins_hash(uint x) {
+    x += x << 10;
+    x ^= x >> 6;
+    x += x << 3;
+    x ^= x >> 11;
+    x += x << 15;
     return x;
 }
 
@@ -19,17 +14,24 @@ struct Generator {
     uint state;
 };
 
-uint random_uint(inout Generator generator) {
-    uint x = generator.state;
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-    generator.state = x;
-	return x;
+Generator init_generator(uvec2 pixel, uvec2 resolution, uint frame) {
+    uint seed = (pixel.x + pixel.y * resolution.x) ^ jenkins_hash(frame);
+    return Generator(jenkins_hash(seed));
+}
+
+float uint_to_unit_float(uint value) {
+    return uintBitsToFloat(0x3f800000 | (value >> 9)) - 1.0;
+}
+
+uint xor_shift(inout uint state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
 }
 
 float random_float(inout Generator generator) {
-    return float(random_uint(generator)) / 4294967295.0f;
+    return uint_to_unit_float(xor_shift(generator.state));
 }
 
 #endif

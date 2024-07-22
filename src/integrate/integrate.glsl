@@ -162,6 +162,11 @@ bool trace_ray(Ray ray, uint bounce, vec2 ndc, out RayHit hit) {
 const uint SAMPLE_COUNT = 4;
 const uint BOUNCE_COUNT = 6;
 
+vec2 pixel_ndc(uvec2 pixel_index, inout Generator generator) {
+    vec2 offset = vec2(random_float(generator), random_float(generator)) - 0.5;
+    return ((vec2(pixel_index) + offset) / vec2(constants.screen_size)) * 2.0 - 1.0;
+}
+
 void main() {
     uvec2 pixel_index = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel_index, constants.screen_size))) {
@@ -169,7 +174,6 @@ void main() {
     }
 
     Generator generator = init_generator(pixel_index, constants.screen_size, constants.frame_index);
-    vec2 ndc = (vec2(pixel_index) / vec2(constants.screen_size)) * 2.0 - 1.0;
 
     vec3 accumulated = vec3(0.0);
 
@@ -177,6 +181,8 @@ void main() {
         vec3 attenuation = vec3(1.0);
 
         RayHit hit;
+
+        vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
 
         float mip_level;
@@ -258,7 +264,12 @@ void main() {
                     + (1.0 - surface.metallic) * cosine_hemisphere_pdf(scatter.normal_dot_scatter);
 
                 accumulated += emissive * attenuation;
-                attenuation *= (brdf * abs(scatter.normal_dot_scatter)) / pdf;
+
+                // FIXME: The minimum here fixes NaN appearing sometimes,
+                // most likely because the pdf is very small (it doesn't ever
+                // appear to be 0.0, thus it is likely to be numeric issues and
+                // not algebraic).
+                attenuation *= min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
             }
         }
     }

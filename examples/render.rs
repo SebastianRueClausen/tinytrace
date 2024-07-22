@@ -89,8 +89,11 @@ impl ApplicationHandler for App {
         self.last_update = Instant::now();
 
         let camera_move = self.inputs.camera_move(&renderer.camera, dt);
-        renderer.camera.move_by(camera_move);
+        if camera_move.moves() {
+            renderer.reset_accumulation();
+        }
 
+        renderer.camera.move_by(camera_move);
         renderer.render_to_surface().unwrap();
         window.request_redraw();
     }

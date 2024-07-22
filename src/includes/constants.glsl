@@ -10,6 +10,7 @@ struct Constants {
     vec4 camera_position;
     uvec2 screen_size;
     uint frame_index;
+    uint accumulated_frame_count;
 };
 
 #endif

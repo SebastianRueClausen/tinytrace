@@ -264,5 +264,12 @@ void main() {
     }
 
     accumulated /= float(SAMPLE_COUNT);
+
+    if (constants.accumulated_frame_count != 0) {
+        vec3 previous = imageLoad(target, ivec2(pixel_index)).xyz;
+        accumulated = (previous * (constants.accumulated_frame_count - 1) + accumulated)
+            / constants.accumulated_frame_count;
+    }
+
     imageStore(target, ivec2(pixel_index), vec4(accumulated, 1.0));
 }

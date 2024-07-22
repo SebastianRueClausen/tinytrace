@@ -35,6 +35,7 @@ pub struct Renderer {
     pub constants: Handle<Buffer>,
     pub camera: Camera,
     pub extent: vk::Extent2D,
+    pub accumulated_frame_count: u32,
 }
 
 impl Renderer {
@@ -84,6 +85,7 @@ impl Renderer {
                 x: extent.width as f32,
                 y: extent.height as f32,
             }),
+            accumulated_frame_count: 0,
             context,
             scene,
             render_target,
@@ -109,6 +111,7 @@ impl Renderer {
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             camera_position: self.camera.position.extend(0.0),
+            accumulated_frame_count: self.accumulated_frame_count,
             screen_size: UVec2 {
                 x: self.extent.width,
                 y: self.extent.width,
@@ -116,7 +119,6 @@ impl Renderer {
             proj_view,
             view,
             proj,
-            ..Default::default()
         };
 
         self.context.write_buffers(&[BufferWrite {
@@ -134,6 +136,10 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn reset_accumulation(&mut self) {
+        self.accumulated_frame_count = 0;
+    }
+
     pub fn render_to_surface(&mut self) -> Result<()> {
         self.render_to_target()?;
         let post_process = self
@@ -147,6 +153,7 @@ impl Renderer {
             &self.render_target,
             &swapchain_image,
         )?;
+        self.accumulated_frame_count += 1;
         self.context.present(&swapchain_image)
     }
 
@@ -169,7 +176,7 @@ struct Constants {
     camera_position: Vec4,
     screen_size: UVec2,
     frame_index: u32,
-    padding: u32,
+    accumulated_frame_count: u32,
 }
 
 const RENDER_TARGET_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;

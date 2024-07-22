@@ -69,3 +69,11 @@ pub struct CameraMove {
     pub yaw: f32,
     pub pitch: f32,
 }
+
+impl CameraMove {
+    pub fn moves(&self) -> bool {
+        self.translation.abs().max_element() > 1e-4
+            || self.yaw.abs() > 1e-4
+            || self.pitch.abs() > 1e-4
+    }
+}

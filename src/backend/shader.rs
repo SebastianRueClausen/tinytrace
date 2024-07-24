@@ -7,7 +7,7 @@ use super::command::CommandBuffer;
 use super::device::Device;
 use super::glsl::render_shader;
 use super::sync::Access;
-use super::{Buffer, Context, Error, Handle, Image, Lifetime, Result, Sampler, Tlas};
+use super::{Buffer, Context, Error, Handle, Image, Lifetime, Sampler, Tlas};
 
 #[derive(Debug, Clone)]
 pub enum BindingType {
@@ -102,7 +102,7 @@ macro_rules! binding {
 fn create_descriptor_layout(
     device: &Device,
     bindings: &[Binding],
-) -> Result<vk::DescriptorSetLayout> {
+) -> Result<vk::DescriptorSetLayout, Error> {
     let flags: Vec<_> = bindings
         .iter()
         .map(|binding| {
@@ -385,7 +385,7 @@ impl Shader {
 fn create_pipeline_layout(
     device: &Device,
     descriptor_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout> {
+) -> Result<vk::PipelineLayout, Error> {
     let layout_info =
         vk::PipelineLayoutCreateInfo::default().set_layouts(slice::from_ref(&descriptor_layout));
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
@@ -400,7 +400,7 @@ pub struct ShaderRequest<'a> {
 }
 
 impl Context {
-    fn create_shader_module(&self, request: &ShaderRequest) -> Result<vk::ShaderModule> {
+    fn create_shader_module(&self, request: &ShaderRequest) -> Result<vk::ShaderModule, Error> {
         let compiler = shaderc::Compiler::new().unwrap();
         let mut options = shaderc::CompileOptions::new().unwrap();
         options.set_include_callback(|name, _, _, _| {
@@ -435,7 +435,7 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &ShaderRequest,
-    ) -> Result<Handle<Shader>> {
+    ) -> Result<Handle<Shader>, Error> {
         let module = self.create_shader_module(request)?;
         let descriptor_layout = create_descriptor_layout(&self.device, request.bindings)?;
         let pipeline_layout = create_pipeline_layout(&self.device, descriptor_layout)?;
@@ -625,19 +625,17 @@ impl Context {
     }
 
     /// Dispatch bound shader with `width` * `height` threads.
-    pub fn dispatch(&mut self, width: u32, height: u32) -> Result<&mut Self> {
+    pub fn dispatch(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
         self.bound_shader_mut().has_been_dispatched = true;
 
+        let (mut buffers, mut images, mut tlases) = (Vec::new(), Vec::new(), Vec::new());
         let create_access = |access: vk::AccessFlags2| Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access,
         };
 
-        let (mut buffers, mut images, mut tlases) = (Vec::new(), Vec::new(), Vec::new());
-        self.bound_shader()
-            .bound
-            .values()
-            .for_each(|resource| match resource.clone() {
+        for resource in self.bound_shader().bound.values().cloned() {
+            match resource {
                 BoundResource::Buffer(buffer, access) => {
                     buffers.push((buffer, create_access(access)));
                 }
@@ -648,7 +646,9 @@ impl Context {
                     let access = vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
                     tlases.push((tlas.clone(), create_access(access)));
                 }
-            });
+            }
+        }
+
         self.access_resources(&images, &buffers, &[], &tlases)?;
 
         let bound_shader = self.bound_shader();

@@ -1,9 +1,8 @@
-use crate::error::Error;
-use crate::error::ErrorKind;
 use std::ffi::CStr;
 use std::{ffi, ops, slice};
 
 use super::instance::Instance;
+use super::Error;
 use ash::{ext, khr, vk};
 
 pub struct Device {
@@ -35,20 +34,17 @@ impl Device {
             .queue_priorities(&[1.0]);
         let mut features = vk::PhysicalDeviceFeatures2::default().features({
             vk::PhysicalDeviceFeatures::default()
-                .pipeline_statistics_query(true)
                 .sampler_anisotropy(true)
                 .shader_int16(true)
         });
         let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::default()
             .storage_buffer16_bit_access(true)
-            .uniform_and_storage_buffer16_bit_access(true)
-            .shader_draw_parameters(true);
+            .uniform_and_storage_buffer16_bit_access(true);
         let mut vulkan_1_2_features = vk::PhysicalDeviceVulkan12Features::default()
             .buffer_device_address(true)
             .descriptor_binding_variable_descriptor_count(true)
             .runtime_descriptor_array(true)
             .shader_float16(true)
-            .scalar_block_layout(true)
             .timeline_semaphore(true);
         let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
             .synchronization2(true)
@@ -165,9 +161,7 @@ fn select_physical_device(instance: &Instance) -> Result<(vk::PhysicalDevice, u3
             fallback.get_or_insert((physical_device, queue_index));
         }
     }
-    preferred
-        .or(fallback)
-        .ok_or(Error::from(ErrorKind::NoDevice))
+    preferred.or(fallback).ok_or(Error::NoSuitableDevice)
 }
 
 const EXTENSIONS: &[*const ffi::c_char] = &[

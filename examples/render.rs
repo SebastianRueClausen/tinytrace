@@ -5,7 +5,8 @@ use bit_set::BitSet;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
-use tinytrace::Renderer;
+use tinytrace::error::ErrorKind;
+use tinytrace::{backend, Renderer};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -92,9 +93,19 @@ impl ApplicationHandler for App {
         if camera_move.moves() {
             renderer.reset_accumulation();
         }
-
         renderer.camera.move_by(camera_move);
-        renderer.render_to_surface().unwrap();
+
+        if let Err(error) = renderer.render_to_surface() {
+            if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
+                let window_size = window.inner_size();
+                renderer
+                    .resize(vk::Extent2D {
+                        width: window_size.width,
+                        height: window_size.height,
+                    })
+                    .unwrap();
+            }
+        }
         window.request_redraw();
     }
 }

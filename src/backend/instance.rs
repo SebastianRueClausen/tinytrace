@@ -1,7 +1,7 @@
 use std::ffi::{self, CStr, CString};
 use std::ops;
 
-use crate::error::Error;
+use super::Error;
 use ash::{ext, khr, vk};
 
 pub struct Instance {

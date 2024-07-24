@@ -5,8 +5,8 @@ use std::{array, collections::HashMap, mem, slice};
 use super::device::Device;
 use super::instance::Instance;
 use super::sync::Access;
+use super::Error;
 use super::{BufferWrite, Context, Handle, Lifetime};
-use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy)]
 pub enum BufferType {
@@ -63,7 +63,7 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &BufferRequest,
-    ) -> Result<Handle<Buffer>> {
+    ) -> Result<Handle<Buffer>, Error> {
         let pool = self.pools.entry(lifetime).or_default();
         let buffer = Buffer::new(&self.device, &mut pool.allocator, request)?;
         Ok(Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
@@ -75,7 +75,7 @@ impl Buffer {
         device: &Device,
         allocator: &mut Allocator,
         request: &BufferRequest,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         let size = request.size.max(4);
         let usage_flags = request.ty.usage_flags();
         let buffer_info = vk::BufferCreateInfo::default()
@@ -159,7 +159,7 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &ImageRequest,
-    ) -> Result<Handle<Image>> {
+    ) -> Result<Handle<Image>, Error> {
         let pool = self.pools.entry(lifetime).or_default();
         let mut usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
@@ -284,7 +284,7 @@ pub fn create_image_view(
     image: vk::Image,
     format: vk::Format,
     mip_level_count: u32,
-) -> Result<vk::ImageView> {
+) -> Result<vk::ImageView, Error> {
     let aspect_mask = format_aspect(format);
     let image_view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -340,7 +340,11 @@ pub struct MemoryBlock {
 }
 
 impl MemoryBlock {
-    pub fn new(device: &Device, size: vk::DeviceSize, memory_type_index: u32) -> Result<Self> {
+    pub fn new(
+        device: &Device,
+        size: vk::DeviceSize,
+        memory_type_index: u32,
+    ) -> Result<Self, Error> {
         let mut allocate_flags_info =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let allocation_info = vk::MemoryAllocateInfo::default()
@@ -376,7 +380,7 @@ impl MemoryBlock {
         }
     }
 
-    pub fn map(&self, device: &Device) -> Result<*mut u8> {
+    pub fn map(&self, device: &Device) -> Result<*mut u8, Error> {
         let flags = vk::MemoryMapFlags::empty();
         Ok(unsafe { device.map_memory(self.memory, 0, vk::WHOLE_SIZE, flags)? as *mut u8 })
     }
@@ -405,7 +409,7 @@ impl Allocator {
         device: &Device,
         memory_flags: vk::MemoryPropertyFlags,
         requirements: vk::MemoryRequirements,
-    ) -> Result<(vk::DeviceMemory, MemoryIndex)> {
+    ) -> Result<(vk::DeviceMemory, MemoryIndex), Error> {
         let memory_type_index =
             memory_type_index(device, requirements.memory_type_bits, memory_flags);
         let blocks = self.blocks.entry(memory_type_index).or_default();
@@ -448,7 +452,7 @@ impl Allocator {
         }
     }
 
-    pub fn map(&mut self, device: &Device, index: MemoryIndex) -> Result<*mut u8> {
+    pub fn map(&mut self, device: &Device, index: MemoryIndex) -> Result<*mut u8, Error> {
         let block = &mut self.blocks.get_mut(&index.memory_type_index).unwrap()[index.block_index];
         let mapping = block.mapping.get_or_insert_with(|| unsafe {
             device
@@ -478,7 +482,7 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self> {
+    pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self, Error> {
         let create_info = vk::SamplerCreateInfo::default()
             .mag_filter(request.filter)
             .min_filter(request.filter)
@@ -593,7 +597,7 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &BlasRequest,
-    ) -> Result<Handle<Blas>> {
+    ) -> Result<Handle<Blas>, Error> {
         let geometry = self.blas_geometry(request, None, None);
         let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
         unsafe {
@@ -665,7 +669,7 @@ pub struct BlasBuild {
 }
 
 impl Context {
-    pub fn build_blases(&mut self, builds: &[BlasBuild]) -> Result<&mut Self> {
+    pub fn build_blases(&mut self, builds: &[BlasBuild]) -> Result<&mut Self, Error> {
         if builds.is_empty() {
             return Ok(self);
         }
@@ -682,7 +686,7 @@ impl Context {
                     },
                 )
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, _>>()?;
         let geometries: Vec<vk::AccelerationStructureGeometryKHR> = builds
             .iter()
             .map(|build| {
@@ -753,7 +757,11 @@ pub struct Tlas {
 }
 
 impl Context {
-    pub fn create_tlas(&mut self, lifetime: Lifetime, instance_count: u32) -> Result<Handle<Tlas>> {
+    pub fn create_tlas(
+        &mut self,
+        lifetime: Lifetime,
+        instance_count: u32,
+    ) -> Result<Handle<Tlas>, Error> {
         let modes = [
             vk::BuildAccelerationStructureModeKHR::BUILD,
             vk::BuildAccelerationStructureModeKHR::UPDATE,
@@ -864,7 +872,7 @@ impl Context {
         tlas: &Handle<Tlas>,
         mode: vk::BuildAccelerationStructureModeKHR,
         instances: &[TlasInstance],
-    ) -> Result<&mut Self> {
+    ) -> Result<&mut Self, Error> {
         let instance_data: Vec<_> = instances
             .iter()
             .map(|instance| {
@@ -964,7 +972,7 @@ fn tlas_geometry_info(
 
 const STRUCTURE_SRC_ACCESS: Access = Access {
     stage: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
-    // Not an error, this is actually what the spec say.
+    // Not an error, this is actually what the spec says.
     access: vk::AccessFlags2::SHADER_READ,
 };
 

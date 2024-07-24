@@ -3,14 +3,13 @@ use std::mem;
 use ash::vk;
 use glam::{Mat4, Quat, Vec3};
 
-use crate::asset;
 use crate::backend::resource::{BlasBuild, BlasRequest, BufferRange, TlasInstance};
 use crate::backend::{
     Blas, Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageRequest,
     ImageWrite, Lifetime, MemoryLocation, Sampler, SamplerRequest, Tlas,
 };
-
-use super::error::Result;
+use crate::Error;
+use crate::{asset, backend};
 
 pub struct Scene {
     pub colors: Handle<Buffer>,
@@ -25,7 +24,7 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self> {
+    pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self, Error> {
         let mut objects = Vec::new();
 
         for instance in &scene.instances {
@@ -57,7 +56,7 @@ impl Scene {
             .textures
             .iter()
             .map(|texture| create_texture(context, texture))
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, _>>()?;
         let image_writes: Vec<_> = scene
             .textures
             .iter()
@@ -95,7 +94,7 @@ impl Scene {
                     },
                 )
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, backend::Error>>()?;
 
         let blas_builds: Vec<_> = blases
             .iter()
@@ -213,7 +212,7 @@ fn texture_kind_format(kind: asset::TextureKind) -> vk::Format {
     }
 }
 
-fn create_buffer<T>(context: &mut Context, data: &[T]) -> Result<Handle<Buffer>> {
+fn create_buffer<T>(context: &mut Context, data: &[T]) -> Result<Handle<Buffer>, backend::Error> {
     context.create_buffer(
         Lifetime::Scene,
         &BufferRequest {
@@ -234,7 +233,10 @@ fn scene_buffer_write<'a, T: bytemuck::NoUninit>(
     }
 }
 
-fn create_texture(context: &mut Context, texture: &asset::Texture) -> Result<Handle<Image>> {
+fn create_texture(
+    context: &mut Context,
+    texture: &asset::Texture,
+) -> Result<Handle<Image>, backend::Error> {
     context.create_image(
         Lifetime::Scene,
         &ImageRequest {

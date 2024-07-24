@@ -1,21 +1,21 @@
 use ash::vk;
 
-use super::shader::DescriptorBuffer;
-use super::{device::Device, sync::Sync, Buffer};
-use super::{Allocator, BufferRequest, BufferType, MemoryLocation};
-use crate::error::{Error, Result};
+use super::{
+    device::Device, shader::DescriptorBuffer, sync::Sync, Allocator, Buffer, BufferRequest,
+    BufferType, Error, MemoryLocation,
+};
 
 #[derive(Debug)]
 pub struct CommandBuffer {
     pub pool: vk::CommandPool,
     pub buffer: vk::CommandBuffer,
     pub descriptor_buffer: DescriptorBuffer,
-    /// The timestamp that is signaled when all commands have been executed.
+    /// The timestamp signaled when all commands have executed.
     pub timestamp: u64,
 }
 
 impl CommandBuffer {
-    pub fn new(device: &Device, allocator: &mut Allocator) -> Result<Self> {
+    pub fn new(device: &Device, allocator: &mut Allocator) -> Result<Self, Error> {
         let pool = unsafe {
             let info =
                 vk::CommandPoolCreateInfo::default().queue_family_index(device.queue_family_index);
@@ -46,7 +46,7 @@ impl CommandBuffer {
         })
     }
 
-    pub fn begin(&self, device: &Device) -> Result<()> {
+    pub fn begin(&self, device: &Device) -> Result<(), Error> {
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe {
@@ -63,13 +63,13 @@ impl CommandBuffer {
         Ok(())
     }
 
-    pub fn end(&mut self, device: &Device, timestamp: u64) -> Result<()> {
+    pub fn end(&mut self, device: &Device, timestamp: u64) -> Result<(), Error> {
         self.descriptor_buffer.bound_range = 0..0;
         self.timestamp = timestamp;
         unsafe { device.end_command_buffer(self.buffer).map_err(Error::from) }
     }
 
-    pub fn clear(&self, semaphores: &Sync, device: &Device) -> Result<()> {
+    pub fn clear(&self, semaphores: &Sync, device: &Device) -> Result<(), Error> {
         semaphores.wait_for_timestamp(device, self.timestamp)?;
         unsafe {
             let flags = vk::CommandPoolResetFlags::RELEASE_RESOURCES;

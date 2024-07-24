@@ -15,6 +15,7 @@
 pub mod command;
 pub mod copy;
 mod device;
+mod error;
 mod glsl;
 mod handle;
 mod instance;
@@ -29,16 +30,14 @@ mod test;
 use std::collections::HashMap;
 use std::slice;
 
-use crate::error::ErrorKind;
-
 use self::sync::Sync;
 use self::{surface::Swapchain, sync::Access};
 
-use super::error::{Error, Result};
 use ash::vk;
 use command::CommandBuffer;
 pub use copy::{BufferWrite, Download, ImageWrite};
 use device::Device;
+pub use error::Error;
 pub use handle::Handle;
 use instance::Instance;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -91,7 +90,7 @@ impl Pool {
         }
     }
 
-    fn clear(&mut self, sync: &Sync, device: &Device) -> Result<()> {
+    fn clear(&mut self, sync: &Sync, device: &Device) -> Result<(), Error> {
         macro_rules! timestamp {
             ($item:ident) => {
                 self.$item.iter().map(|b| b.timestamp).max().unwrap_or(0)
@@ -159,7 +158,7 @@ impl Context {
     pub fn new(
         window: Option<(RawWindowHandle, RawDisplayHandle)>,
         extent: vk::Extent2D,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
 
@@ -178,7 +177,7 @@ impl Context {
 
         let command_buffers: Vec<_> = (0..COMMAND_BUFFER_COUNT)
             .map(|_| CommandBuffer::new(&device, &mut static_pool.allocator))
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, _>>()?;
 
         let pools = HashMap::from([
             (Lifetime::Static, static_pool),
@@ -210,7 +209,7 @@ impl Context {
         self.command_buffers.first_mut().unwrap()
     }
 
-    fn begin_next_command_buffer(&mut self) -> Result<()> {
+    fn begin_next_command_buffer(&mut self) -> Result<(), Error> {
         self.command_buffers.rotate_right(1);
         let buffer = self.command_buffers.first_mut().unwrap();
         buffer.clear(&self.sync, &self.device)?;
@@ -218,7 +217,7 @@ impl Context {
     }
 
     fn check_handle<T>(&self, handle: &Handle<T>) {
-        debug_assert_eq!(self.pools[&handle.lifetime].epoch, handle.epoch)
+        assert_eq!(self.pools[&handle.lifetime].epoch, handle.epoch)
     }
 
     fn pool_mut(&mut self, lifetime: Lifetime) -> &mut Pool {
@@ -227,7 +226,7 @@ impl Context {
 
     /// Advance `lifetime`. This destroys all resources with `lifetime` and
     /// invalidates their handles.
-    pub fn advance_lifetime(&mut self, lifetime: Lifetime) -> Result<()> {
+    pub fn advance_lifetime(&mut self, lifetime: Lifetime) -> Result<(), Error> {
         // TODO: Maybe check if commands have been recorded before doing this.
         self.execute_commands(false)?;
         if let Some(pool) = self.pools.get_mut(&lifetime) {
@@ -266,14 +265,13 @@ impl Context {
 }
 
 impl Context {
-    fn swapchain(&self) -> Result<&(Swapchain, Vec<Handle<Image>>)> {
-        self.swapchain
-            .as_ref()
-            .ok_or_else(|| Error::from(ErrorKind::MissingSurface))
+    fn swapchain(&self) -> &(Swapchain, Vec<Handle<Image>>) {
+        self.swapchain.as_ref().expect("no swapchain present")
     }
 
-    pub fn surface_format(&self) -> Result<vk::Format> {
-        self.swapchain().map(|(swapchain, _)| swapchain.format)
+    pub fn surface_format(&self) -> vk::Format {
+        let (swapchain, _) = self.swapchain();
+        swapchain.format
     }
 
     pub fn frame_index(&self) -> usize {
@@ -289,14 +287,14 @@ impl Context {
         &mut self,
         lifetime: Lifetime,
         request: &SamplerRequest,
-    ) -> Result<Handle<Sampler>> {
+    ) -> Result<Handle<Sampler>, Error> {
         let pool = self.pools.entry(lifetime).or_default();
         Sampler::new(&self.device, request)
             .map(|sampler| Handle::new(lifetime, pool.epoch, &mut pool.samplers, sampler))
     }
 
     /// Executes all recorded commands. Returns the timestamp signaled when when done.
-    pub fn execute_commands(&mut self, present: bool) -> Result<u64> {
+    pub fn execute_commands(&mut self, present: bool) -> Result<u64, Error> {
         let command_buffer = self.command_buffers.first_mut().unwrap();
         command_buffer.end(&self.device, self.sync.timestamp + 1)?;
 
@@ -343,48 +341,60 @@ impl Context {
         Ok(self.sync.timestamp)
     }
 
-    /// Acquire the next swapchain image.
-    pub fn swapchain_image(&mut self) -> Result<Handle<Image>> {
+    /// Acquire the next swapchain image. This must be done exactly once before calling `present`.
+    /// The error `Error::SurfaceOutdated` may be returned, which signals that
+    pub fn swapchain_image(&mut self) -> Result<Handle<Image>, Error> {
         // Wait here to avoid the CPU being to far ahead of the GPU. Also ensure that
         // the `acquired` semaphore is available.
         if let Some(timestamp) = self.sync.frame(0).present_timestamp {
             self.sync.wait_for_timestamp(&self.device, timestamp)?;
         }
-
-        let (swapchain, images) = self.swapchain()?;
-        let index = swapchain.image_index(self.sync.frame(0).acquired)? as usize;
+        let (swapchain, images) = self.swapchain();
+        let index = swapchain.image_index(self.sync.frame(0).acquired)?;
         let image = images[index].clone();
         self.acquired_swapchain_image = Some(index);
-
         Ok(image)
     }
 
-    pub fn present(&mut self, image: &Handle<Image>) -> Result<()> {
+    pub fn resize_surface(&mut self, extent: vk::Extent2D) -> Result<(), Error> {
+        // We have to wait until idle here because we don't use fences when presenting.
+        self.device.wait_until_idle()?;
+        let pool = self.pools.entry(Lifetime::Surface).or_default();
+        pool.clear(&self.sync, &self.device)?;
+        if let Some((swapchain, images)) = &mut self.swapchain {
+            *images = swapchain
+                .recreate(&self.device, extent)?
+                .into_iter()
+                .map(|image| Handle::new(Lifetime::Surface, pool.epoch, &mut pool.images, image))
+                .collect();
+        }
+        Ok(())
+    }
+
+    pub fn present(&mut self, image: &Handle<Image>) -> Result<(), Error> {
         let access = Access {
             stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
             access: vk::AccessFlags2::empty(),
         };
         self.access_resources(&[(image.clone(), access)], &[], &[], &[])?;
-
         let timestamp = self.execute_commands(true)?;
-
         if let Some(image_index) = self.acquired_swapchain_image.take().map(|i| i as u32) {
-            if self.image(image).swapchain_index != Some(image_index) {
-                return Err(Error::from(ErrorKind::WrongSwapchainImage {
-                    index: self.image(image).swapchain_index,
-                    expected: image_index,
-                }));
-            }
-            let (swapchain, _) = self.swapchain()?;
-            swapchain.present(&self.device, self.sync.frame(0).released, image_index)?;
+            assert_eq!(
+                self.image(image).swapchain_index,
+                Some(image_index),
+                "trying to present wrong image"
+            );
+            let (swapchain, _) = self.swapchain();
+            let present_result =
+                swapchain.present(&self.device, self.sync.frame(0).released, image_index);
             self.sync.advance_frame(timestamp);
-            Ok(())
+            present_result
         } else {
-            Err(Error::from(ErrorKind::NoSwapchainImage))
+            panic!("no swapchain image has been acquired");
         }
     }
 
-    fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Handle<Buffer>, *mut u8)> {
+    fn get_scratch(&mut self, size: vk::DeviceSize) -> Result<(Handle<Buffer>, *mut u8), Error> {
         let pool = self.pools.entry(Lifetime::Frame).or_default();
         let scratch = Buffer::new(
             &self.device,

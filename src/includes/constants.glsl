@@ -9,8 +9,7 @@ struct Constants {
     mat4 view, proj, proj_view, inverse_view, inverse_proj;
     vec4 camera_position;
     uvec2 screen_size;
-    uint frame_index;
-    uint accumulated_frame_count;
+    uint frame_index, accumulated_frame_count, sample_count, bounce_count;
 };
 
 #endif

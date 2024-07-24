@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Blas, Buffer, Context, Device, Error, Handle, Image, Result, Tlas};
+use super::{Blas, Buffer, Context, Device, Error, Handle, Image, Tlas};
 use ash::vk;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Ord)]
@@ -113,7 +113,7 @@ impl Context {
         buffers: &[(Handle<Buffer>, Access)],
         blases: &[(Handle<Blas>, Access)],
         tlases: &[(Handle<Tlas>, Access)],
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         let next_timestamp = self.sync.timestamp + 1;
         let images: Vec<_> = images
             .iter()
@@ -195,7 +195,7 @@ pub struct Sync {
 }
 
 impl Sync {
-    pub fn new(device: &Device, frame_count: usize) -> Result<Self> {
+    pub fn new(device: &Device, frame_count: usize) -> Result<Self, Error> {
         let frames: Vec<_> = (0..frame_count)
             .map(|_| {
                 Ok(Frame {
@@ -204,7 +204,7 @@ impl Sync {
                     present_timestamp: None,
                 })
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, Error>>()?;
         Ok(Self {
             timeline: create_semaphore(device, vk::SemaphoreType::TIMELINE)?,
             timestamp: 0,
@@ -214,7 +214,7 @@ impl Sync {
     }
 
     /// Wait until `timestamp` is signaled.
-    pub fn wait_for_timestamp(&self, device: &Device, timestamp: u64) -> Result<Duration> {
+    pub fn wait_for_timestamp(&self, device: &Device, timestamp: u64) -> Result<Duration, Error> {
         let before = Instant::now();
         unsafe {
             let wait_info = vk::SemaphoreWaitInfo::default()
@@ -252,7 +252,7 @@ impl Sync {
     }
 }
 
-pub fn create_semaphore(device: &Device, ty: vk::SemaphoreType) -> Result<vk::Semaphore> {
+pub fn create_semaphore(device: &Device, ty: vk::SemaphoreType) -> Result<vk::Semaphore, Error> {
     let mut type_info = vk::SemaphoreTypeCreateInfo::default().semaphore_type(ty);
     let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
     unsafe {

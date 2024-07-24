@@ -159,9 +159,6 @@ bool trace_ray(Ray ray, uint bounce, vec2 ndc, out RayHit hit) {
     return true;
 }
 
-const uint SAMPLE_COUNT = 4;
-const uint BOUNCE_COUNT = 6;
-
 vec2 pixel_ndc(uvec2 pixel_index, inout Generator generator) {
     vec2 offset = vec2(random_float(generator), random_float(generator)) - 0.5;
     return ((vec2(pixel_index) + offset) / vec2(constants.screen_size)) * 2.0 - 1.0;
@@ -177,7 +174,7 @@ void main() {
 
     vec3 accumulated = vec3(0.0);
 
-    for (uint sample_index = 0; sample_index < SAMPLE_COUNT; sample_index++) {
+    for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
         vec3 attenuation = vec3(1.0);
 
         RayHit hit;
@@ -187,7 +184,7 @@ void main() {
 
         float mip_level;
 
-        for (uint bounce = 0; bounce < BOUNCE_COUNT; bounce++) {
+        for (uint bounce = 0; bounce < constants.bounce_count; bounce++) {
             if (!trace_ray(ray, bounce, ndc, hit)) {
                 accumulated += attenuation;
                 break;
@@ -274,7 +271,7 @@ void main() {
         }
     }
 
-    accumulated /= float(SAMPLE_COUNT);
+    accumulated /= float(constants.sample_count);
 
     if (constants.accumulated_frame_count != 0) {
         vec3 previous = imageLoad(target, ivec2(pixel_index)).xyz;

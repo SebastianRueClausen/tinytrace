@@ -1,4 +1,4 @@
-use ash::vk;
+use crate::backend;
 use std::{
     backtrace::{self, Backtrace},
     fmt, io,
@@ -6,24 +6,10 @@ use std::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
-    #[error("vulkan failed with error: {0}")]
-    Backend(#[from] vk::Result),
-    #[error("failed loading with error: {0}")]
-    Loading(#[from] ash::LoadingError),
-    #[error("no suitable device found")]
-    NoDevice,
-    #[error("failed to compile shader: {0}")]
-    Compilation(#[from] shaderc::Error),
-    #[error("no suitable surface found")]
-    NoSuitableSurface,
+    #[error("backend failed with error: {0}")]
+    Backend(#[from] backend::Error),
     #[error("failed to read scene: {0}")]
     Io(#[from] io::Error),
-    #[error("missing surface")]
-    MissingSurface,
-    #[error("no swapchain image acquired")]
-    NoSwapchainImage,
-    #[error("wrong swapchain image, has index {index:?} expected {expected}")]
-    WrongSwapchainImage { index: Option<u32>, expected: u32 },
 }
 
 #[derive(Debug)]

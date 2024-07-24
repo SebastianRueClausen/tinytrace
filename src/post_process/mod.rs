@@ -24,7 +24,7 @@ impl PostProcess {
             ),
             binding!(
                 storage_image,
-                context.surface_format()?,
+                context.surface_format(),
                 swapchain,
                 None,
                 true

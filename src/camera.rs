@@ -16,23 +16,15 @@ impl Camera {
     pub const UP: Vec3 = Vec3::Y;
 
     pub fn new(surface_size: Vec2) -> Self {
-        let position = Vec3::ZERO;
-        let forward = Vec3::X;
-        let yaw = 0.0;
-        let pitch = 0.0;
-        let z_near = 0.1;
-        let z_far = 400.0;
-        let fov = std::f32::consts::FRAC_PI_2;
-        let aspect = surface_size.x / surface_size.y;
         Self {
-            position,
-            forward,
-            yaw,
-            pitch,
-            z_near,
-            z_far,
-            fov,
-            aspect,
+            position: Vec3::ZERO,
+            forward: Vec3::X,
+            fov: std::f32::consts::FRAC_PI_2,
+            aspect: surface_size.x / surface_size.y,
+            z_near: 0.1,
+            z_far: 400.0,
+            yaw: 0.0,
+            pitch: 0.0,
         }
     }
 

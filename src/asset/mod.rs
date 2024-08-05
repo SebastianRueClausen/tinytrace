@@ -4,12 +4,33 @@ mod normal;
 #[cfg(test)]
 mod test;
 
-use std::path::Path;
+use std::{io, path::Path};
 
 use glam::{Mat4, Vec3};
 use half::f16;
 
 use normal::TangentFrame;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed parsing gltf file: {0}")]
+    Gltf(#[from] gltf::Error),
+    #[error("failed loading file: {0}")]
+    Load(#[from] io::Error),
+    #[error("failed loading image: {0}")]
+    Image(#[from] image::ImageError),
+    #[error(
+        "unsupported format {data_type:?} {dimensions:?} expected \
+        {expected_data_type:?} {expected_dimensions:?} for {attribute}"
+    )]
+    VertexFormat {
+        data_type: gltf::accessor::DataType,
+        dimensions: gltf::accessor::Dimensions,
+        expected_data_type: gltf::accessor::DataType,
+        expected_dimensions: gltf::accessor::Dimensions,
+        attribute: String,
+    },
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -46,7 +67,6 @@ pub struct Mesh {
     pub index_offset: u32,
     pub index_count: u32,
     pub material: u32,
-    pub color_offset: u32,
 }
 
 unsafe impl bytemuck::NoUninit for Mesh {}
@@ -109,7 +129,6 @@ pub struct Scene {
     pub directional_light: DirectionalLight,
     pub vertices: Vec<Vertex>,
     pub positions: Vec<i16>,
-    pub colors: Vec<f16>,
     pub indices: Vec<u32>,
     pub textures: Vec<Texture>,
     pub materials: Vec<Material>,
@@ -136,7 +155,7 @@ impl Scene {
         add_item(&mut self.meshes, mesh) as u32
     }
 
-    pub fn from_gltf<P: AsRef<Path>>(path: P) -> Result<Self, gltf::Error> {
+    pub fn from_gltf<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         import::Data::new(path.as_ref()).and_then(|data| import::load_scene(&data))
     }
 }

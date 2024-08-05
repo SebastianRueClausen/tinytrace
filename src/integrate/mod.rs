@@ -17,7 +17,6 @@ impl Integrator {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(storage_buffer, Vertex, vertices, true, false),
-            binding!(storage_buffer, float, colors, true, false),
             binding!(storage_buffer, uint, indices, true, false),
             binding!(storage_buffer, Material, materials, true, false),
             binding!(storage_buffer, Instance, instances, true, false),
@@ -56,7 +55,6 @@ impl Integrator {
             .bind_shader(&self.integrate)
             .bind_buffer("constants", constants)
             .bind_buffer("vertices", &scene.vertices)
-            .bind_buffer("colors", &scene.colors)
             .bind_buffer("indices", &scene.indices)
             .bind_buffer("materials", &scene.materials)
             .bind_buffer("instances", &scene.instances)

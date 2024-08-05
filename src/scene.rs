@@ -12,7 +12,6 @@ use crate::Error;
 use crate::{asset, backend};
 
 pub struct Scene {
-    pub colors: Handle<Buffer>,
     pub vertices: Handle<Buffer>,
     pub indices: Handle<Buffer>,
     pub materials: Handle<Buffer>,
@@ -38,7 +37,6 @@ impl Scene {
 
         let positions = create_buffer(context, &scene.positions)?;
         let vertices = create_buffer(context, &scene.vertices)?;
-        let colors = create_buffer(context, &scene.colors)?;
         let indices = create_buffer(context, &scene.indices)?;
         let materials = create_buffer(context, &scene.materials)?;
         let instances = create_buffer(context, &instance_data)?;
@@ -46,7 +44,6 @@ impl Scene {
         context.write_buffers(&[
             scene_buffer_write(&positions, &scene.positions),
             scene_buffer_write(&vertices, &scene.vertices),
-            scene_buffer_write(&colors, &scene.colors),
             scene_buffer_write(&indices, &scene.indices),
             scene_buffer_write(&materials, &scene.materials),
             scene_buffer_write(&instances, &instance_data),
@@ -126,7 +123,6 @@ impl Scene {
 
         Ok(Self {
             vertices,
-            colors,
             indices,
             materials,
             instances,
@@ -155,9 +151,9 @@ impl Object {
             material: self.material,
             vertex_offset: mesh.vertex_offset,
             index_offset: mesh.index_offset,
-            color_offset: mesh.color_offset,
             inverse_transform,
             transform,
+            padding: 0,
         }
     }
 
@@ -259,6 +255,6 @@ struct Instance {
     normal_transform: Mat4,
     vertex_offset: u32,
     index_offset: u32,
-    color_offset: u32,
     material: u32,
+    padding: u32,
 }

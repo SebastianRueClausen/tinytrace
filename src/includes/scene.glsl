@@ -79,7 +79,7 @@ struct BoundingSphere {
 
 struct Instance {
     mat4 transform, inverse_transform, normal_transform;
-    uint vertex_offset, index_offset, color_offset, material;
+    uint vertex_offset, index_offset, material, padding;
 };
 
 const uint INVALID_INDEX = 4294967295;

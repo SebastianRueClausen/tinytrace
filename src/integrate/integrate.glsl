@@ -3,18 +3,8 @@ struct RayHit {
     vec3 world_position;
     Basis tangent_space;
     vec2 texcoord, texcoord_ddx, texcoord_ddy;
-    vec4 color;
     int instance;
 };
-
-f16vec4 get_vertex_color(uint base_index) {
-    return f16vec4(
-        colors[base_index + 0],
-        colors[base_index + 1],
-        colors[base_index + 2],
-        colors[base_index + 3]
-    );
-}
 
 struct Ray {
     vec3 direction;
@@ -128,14 +118,6 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
             + ddy.z * vec2(triangle_vertices[2].texcoord);
     }
 
-    if (instance.color_offset != INVALID_INDEX) {
-        hit.color = barycentric.x * vec4(get_vertex_color(instance.color_offset + (triangle_indices[0] - instance.vertex_offset) * 4))
-            + barycentric.y * vec4(get_vertex_color(instance.color_offset + (triangle_indices[1] - instance.vertex_offset) * 4))
-            + barycentric.z * vec4(get_vertex_color(instance.color_offset + (triangle_indices[2] - instance.vertex_offset) * 4));
-    } else {
-        hit.color = vec4(1.0f);
-    }
-
     return hit;
 }
 
@@ -214,7 +196,6 @@ void main() {
 
                 vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level);
                 albedo *= vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
-                albedo *= hit.color;
 
                 surface.albedo = albedo.rgb;
 

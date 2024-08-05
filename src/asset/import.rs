@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{array, fs, io, mem};
 
-use crate::asset::normal::TangentFrame;
-
+use super::normal::TangentFrame;
 use super::{
-    normal, BoundingSphere, Instance, Material, Mesh, Model, Scene, Texture, TextureKind, Vertex,
+    normal, BoundingSphere, Error, Instance, Material, Mesh, Model, Scene, Texture, TextureKind,
+    Vertex,
 };
 use bytemuck::AnyBitPattern;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -39,7 +39,7 @@ pub struct Data {
 }
 
 impl Data {
-    pub fn new(path: &Path) -> Result<Self, gltf::Error> {
+    pub fn new(path: &Path) -> Result<Self, Error> {
         let file = fs::File::open(path)?;
         let gltf = Gltf::from_reader(io::BufReader::new(file))?;
         let parent_path = path.parent().unwrap_or(path).to_owned();
@@ -101,7 +101,7 @@ fn load_material(
     scene: &mut Scene,
     fallback: &mut Fallback,
     material: gltf::Material,
-) -> Result<Material, gltf::Error> {
+) -> Result<Material, Error> {
     let mut load = |specs, accessor: Option<gltf::Texture>, transform: fn(&mut [u8])| {
         Ok::<u16, gltf::Error>(if let Some(accessor) = accessor {
             let image = data.image(accessor.source().source())?;
@@ -150,13 +150,20 @@ fn load_indices(
     data: &Data,
     primitive: &gltf::Primitive,
     vertex_count: u32,
-) -> Result<Vec<u32>, gltf::Error> {
+) -> Result<Vec<u32>, Error> {
     use gltf::accessor::{DataType, Dimensions};
     let Some(accessor) = primitive.indices() else {
         return Ok((0..vertex_count).collect());
     };
+    let format_error = || Error::VertexFormat {
+        data_type: accessor.data_type(),
+        dimensions: accessor.dimensions(),
+        expected_data_type: DataType::U32,
+        expected_dimensions: Dimensions::Scalar,
+        attribute: "index".to_owned(),
+    };
     if accessor.dimensions() != Dimensions::Scalar {
-        panic!("indices must be scalar");
+        return Err(format_error());
     }
     let index_data = data.accessor_data(&accessor);
     let indices = match accessor.data_type() {
@@ -168,8 +175,8 @@ fn load_indices(
             .chunks(2)
             .map(|bytes| bytemuck::pod_read_unaligned::<u16>(bytes) as u32)
             .collect(),
-        ty => {
-            panic!("invalid index type {ty:?}");
+        _ => {
+            return Err(format_error());
         }
     };
     Ok(indices)
@@ -200,46 +207,29 @@ fn read_from_accessor<T: AnyBitPattern>(data: &Data, accessor: &gltf::Accessor) 
         .collect()
 }
 
-fn vertex_colors<T: AnyBitPattern>(
-    data: &Data,
-    accessor: &gltf::Accessor,
-    decode: fn(&T) -> f16,
-) -> Vec<f16> {
-    read_from_accessor::<T>(data, accessor)
-        .windows(accessor.dimensions().multiplicity())
-        .flat_map(|items| {
-            array::from_fn::<_, 4, _>(|index| items.get(index).map(decode).unwrap_or(f16::ONE))
-        })
-        .collect()
-}
-
 fn load_mesh(
     data: &Data,
     scene: &mut Scene,
     fallback: &mut Fallback,
     primitive: gltf::Primitive,
-) -> Mesh {
+) -> Result<Mesh, Error> {
     use gltf::accessor::{DataType, Dimensions};
     let material = primitive
         .material()
         .index()
         .map(|material| material as u32)
         .unwrap_or_else(|| fallback_material(scene, fallback));
-
     let accessor = primitive.get(&gltf::Semantic::Positions).unwrap();
-    verify_accessor("positions", &accessor, DataType::F32, Dimensions::Vec3);
+    verify_accessor("positions", &accessor, DataType::F32, Dimensions::Vec3)?;
     let positions = read_from_accessor::<Vec3>(data, &accessor);
-
     let indices = load_indices(data, &primitive, positions.len() as u32).unwrap();
-
     let normals = match primitive.get(&gltf::Semantic::Normals) {
         None => generate_normals(&positions, &indices),
         Some(accessor) => {
-            verify_accessor("normals", &accessor, DataType::F32, Dimensions::Vec3);
+            verify_accessor("normals", &accessor, DataType::F32, Dimensions::Vec3)?;
             read_from_accessor(data, &accessor)
         }
     };
-
     let tex_coords = match primitive.get(&gltf::Semantic::TexCoords(0)) {
         None => vec![Vec2::ZERO; normals.len()],
         Some(accessor) => {
@@ -248,35 +238,17 @@ fn load_mesh(
                 &accessor,
                 DataType::F32,
                 Dimensions::Vec2,
-            );
+            )?;
             read_from_accessor(data, &accessor)
         }
     };
-
     let tangents = match primitive.get(&gltf::Semantic::Tangents) {
         None => generate_tangents(&positions, &tex_coords, &normals, &indices),
         Some(accessor) => {
-            verify_accessor("tangents", &accessor, DataType::F32, Dimensions::Vec4);
+            verify_accessor("tangents", &accessor, DataType::F32, Dimensions::Vec4)?;
             read_from_accessor(data, &accessor)
         }
     };
-
-    let colors =
-        primitive
-            .get(&gltf::Semantic::Colors(0))
-            .map(|accessor| match accessor.data_type() {
-                DataType::U8 => vertex_colors::<u8>(data, &accessor, |value| {
-                    f16::from_f32(*value as f32 / u8::MAX as f32)
-                }),
-                DataType::U16 => vertex_colors::<u16>(data, &accessor, |value| {
-                    f16::from_f32(*value as f32 / u16::MAX as f32)
-                }),
-                DataType::F32 => {
-                    vertex_colors::<f32>(data, &accessor, |value| f16::from_f32(*value))
-                }
-                _ => panic!("invalid vertex color format"),
-            });
-
     let bounding_sphere = bounding_sphere(&primitive);
     let vertices = tex_coords
         .iter()
@@ -287,41 +259,24 @@ fn load_mesh(
             tangent_frame: TangentFrame::new(*normal, *tangent),
             tex_coord: tex_coord.to_array().map(f16::from_f32),
         });
-
-    let positions = positions.iter().flat_map(|position| {
-        let position = (*position - bounding_sphere.center) / bounding_sphere.radius;
-        debug_assert!(position.max_element() <= 1.0);
-        position
-            .to_array()
-            .map(|value| normal::quantize_snorm(value, 16) as i16)
-    });
-
-    let vertex_offset = scene.vertices.len() as u32;
-    let vertex_count = vertices.len() as u32;
-    scene.vertices.extend(vertices);
-    scene.positions.extend(positions);
-
-    let index_offset = scene.indices.len() as u32;
-    let index_count = indices.len() as u32;
-    scene.indices.extend(indices);
-
-    let color_offset = colors
-        .map(|mut colors| {
-            let offset = scene.colors.len() as u32;
-            scene.colors.append(&mut colors);
-            offset
-        })
-        .unwrap_or(super::INVALID_INDEX);
-
-    Mesh {
-        vertex_count,
-        index_count,
+    extend_vec(
+        &mut scene.positions,
+        positions.iter().flat_map(|position| {
+            let position = (*position - bounding_sphere.center) / bounding_sphere.radius;
+            debug_assert!(position.max_element() <= 1.0);
+            position
+                .to_array()
+                .map(|value| normal::quantize_snorm(value, 16) as i16)
+        }),
+    );
+    Ok(Mesh {
+        vertex_count: vertices.len() as u32,
+        index_count: indices.len() as u32,
+        vertex_offset: extend_vec(&mut scene.vertices, vertices) as u32,
+        index_offset: extend_vec(&mut scene.indices, indices) as u32,
         bounding_sphere,
-        vertex_offset,
-        index_offset,
         material,
-        color_offset,
-    }
+    })
 }
 
 fn load_model(
@@ -329,19 +284,19 @@ fn load_model(
     scene: &mut Scene,
     fallback: &mut Fallback,
     mesh: gltf::Mesh,
-) -> Result<Model, gltf::Error> {
+) -> Result<Model, Error> {
     let meshes: Vec<_> = mesh.primitives().collect();
-    let mesh_indices = meshes
+    let mesh_indices: Vec<u32> = meshes
         .into_iter()
         .map(|primitive| {
-            let mesh = load_mesh(data, scene, fallback, primitive);
-            scene.add_mesh(mesh)
+            let mesh = load_mesh(data, scene, fallback, primitive)?;
+            Ok(scene.add_mesh(mesh))
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     Ok(Model { mesh_indices })
 }
 
-pub fn load_scene(data: &Data) -> Result<Scene, gltf::Error> {
+pub fn load_scene(data: &Data) -> Result<Scene, Error> {
     let mut scene = Scene::default();
     let mut fallback = Fallback::default();
     scene.instances = load_instances(data.gltf.scenes().flat_map(|scene| scene.nodes()));
@@ -399,7 +354,7 @@ fn create_texture(
         1
     };
     let min_width = width >> (mip_level_count - 1);
-    let min_height = width >> (mip_level_count - 1);
+    let min_height = height >> (mip_level_count - 1);
     assert!(
         min_width >= 4 && min_height >= 4,
         "smallest mip is too small: {min_width} x {min_height}",
@@ -448,20 +403,18 @@ fn verify_accessor(
     accessor: &gltf::Accessor,
     data_type: gltf::accessor::DataType,
     dimensions: gltf::accessor::Dimensions,
-) {
-    if accessor.data_type() != data_type {
-        panic!(
-            "{name} attribute should be of type {:?} but is {:?}",
-            data_type,
-            accessor.data_type(),
-        );
-    }
-    if accessor.dimensions() != dimensions {
-        panic!(
-            "{name} attribute should have dimensions {:?} but is {:?}",
-            dimensions,
-            accessor.dimensions(),
-        );
+) -> Result<(), Error> {
+    let error = || Error::VertexFormat {
+        expected_data_type: data_type,
+        expected_dimensions: dimensions,
+        data_type: accessor.data_type(),
+        dimensions: accessor.dimensions(),
+        attribute: name.to_owned(),
+    };
+    if accessor.data_type() != data_type || accessor.dimensions() != dimensions {
+        Err(error())
+    } else {
+        Ok(())
     }
 }
 
@@ -545,6 +498,12 @@ impl<'a> mikktspace::Geometry for TangentGenerator<'a> {
         let index = self.index(face, vert);
         self.tangents[index] = tangent.into();
     }
+}
+
+fn extend_vec<T>(vec: &mut Vec<T>, items: impl IntoIterator<Item = T>) -> usize {
+    let index = vec.len();
+    vec.extend(items);
+    index
 }
 
 const ALBEDO_SPECS: TextureSpecs = TextureSpecs {

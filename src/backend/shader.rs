@@ -7,7 +7,7 @@ use super::command::CommandBuffer;
 use super::device::Device;
 use super::glsl::render_shader;
 use super::sync::Access;
-use super::{Buffer, Context, Error, Handle, Image, Lifetime, Sampler, Tlas};
+use super::{Buffer, Context, Error, Handle, Image, ImageFormat, Lifetime, Sampler, Tlas};
 
 #[derive(Debug, Clone)]
 pub enum BindingType {
@@ -26,7 +26,7 @@ pub enum BindingType {
     StorageImage {
         count: Option<u32>,
         writes: bool,
-        format: vk::Format,
+        format: ImageFormat,
     },
 }
 

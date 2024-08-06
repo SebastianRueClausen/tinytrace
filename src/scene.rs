@@ -5,8 +5,8 @@ use glam::{Mat4, Quat, Vec3};
 
 use crate::backend::resource::{BlasBuild, BlasRequest, BufferRange, TlasInstance};
 use crate::backend::{
-    Blas, Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageRequest,
-    ImageWrite, Lifetime, MemoryLocation, Sampler, SamplerRequest, Tlas,
+    Blas, Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
+    ImageRequest, ImageWrite, Lifetime, MemoryLocation, Sampler, SamplerRequest, Tlas,
 };
 use crate::Error;
 use crate::{asset, backend};
@@ -199,12 +199,11 @@ fn flatten_instance_tree(
     transform
 }
 
-fn texture_kind_format(kind: asset::TextureKind) -> vk::Format {
+fn texture_kind_format(kind: asset::TextureKind) -> ImageFormat {
     match kind {
-        asset::TextureKind::Albedo => vk::Format::BC1_RGBA_SRGB_BLOCK,
-        asset::TextureKind::Normal => vk::Format::BC5_UNORM_BLOCK,
-        asset::TextureKind::Specular => vk::Format::BC5_UNORM_BLOCK,
-        asset::TextureKind::Emissive => vk::Format::BC1_RGB_SRGB_BLOCK,
+        asset::TextureKind::Albedo => ImageFormat::RgbaBc1Srgb,
+        asset::TextureKind::Normal | asset::TextureKind::Specular => ImageFormat::RgBc5Unorm,
+        asset::TextureKind::Emissive => ImageFormat::RgbBc1Srgb,
     }
 }
 

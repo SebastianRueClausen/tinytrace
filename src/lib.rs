@@ -15,8 +15,8 @@ use std::mem;
 
 use ash::vk;
 use backend::{
-    Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageRequest, Lifetime,
-    MemoryLocation,
+    Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
+    ImageRequest, Lifetime, MemoryLocation,
 };
 use camera::Camera;
 use error::Error;
@@ -217,4 +217,4 @@ impl Default for Config {
     }
 }
 
-const RENDER_TARGET_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
+const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

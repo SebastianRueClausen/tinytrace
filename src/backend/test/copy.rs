@@ -17,7 +17,7 @@ fn transfer() {
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                format: vk::Format::R8G8B8A8_SRGB,
+                format: ImageFormat::Rgba8Srgb,
                 memory_location: MemoryLocation::Device,
                 mip_level_count: 1,
                 extent,
@@ -54,7 +54,7 @@ fn transfer_image_mips() {
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                format: vk::Format::R8G8B8A8_SRGB,
+                format: ImageFormat::Rgba8Srgb,
                 memory_location: MemoryLocation::Device,
                 mip_level_count: 2,
                 extent,
@@ -92,7 +92,7 @@ fn odd_sized_images() {
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                format: vk::Format::R8G8B8A8_SRGB,
+                format: ImageFormat::Rgba8Srgb,
                 memory_location: MemoryLocation::Device,
                 mip_level_count: 1,
                 extent: a_extent,
@@ -103,7 +103,7 @@ fn odd_sized_images() {
         .create_image(
             Lifetime::Frame,
             &ImageRequest {
-                format: vk::Format::R8G8B8A8_SRGB,
+                format: ImageFormat::Rgba8Srgb,
                 memory_location: MemoryLocation::Device,
                 mip_level_count: 1,
                 extent: b_extent,

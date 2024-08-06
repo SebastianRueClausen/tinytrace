@@ -1,6 +1,4 @@
-use ash::vk;
-
-use super::{Binding, BindingType};
+use super::{Binding, BindingType, ImageFormat};
 use std::fmt::Write;
 
 const PRELUDE: &str = r#"
@@ -42,9 +40,11 @@ fn render_binding(name: &str, ty: &BindingType, index: u32) -> String {
 fn binding_format_specifier(ty: &BindingType) -> &'static str {
     if let BindingType::StorageImage { format, .. } = ty {
         match *format {
-            vk::Format::R32G32B32A32_SFLOAT => ", rgba32f",
-            vk::Format::B8G8R8A8_UNORM | vk::Format::R8G8B8A8_UNORM => ", rgba8",
-            _ => panic!("invalid format"),
+            ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm | ImageFormat::Bgra8Unorm => ", rgba8",
+            ImageFormat::Rgba32Float => ", rgba32f",
+            ImageFormat::RgBc5Unorm | ImageFormat::RgbBc1Srgb | ImageFormat::RgbaBc1Srgb => {
+                panic!("block compressed formats not usable as storage images")
+            }
         }
     } else {
         ""

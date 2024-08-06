@@ -42,8 +42,8 @@ pub use handle::Handle;
 use instance::Instance;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 pub use resource::{
-    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageRequest, MemoryLocation,
-    Sampler, SamplerRequest, Tlas,
+    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageFormat, ImageRequest,
+    MemoryLocation, Sampler, SamplerRequest, Tlas,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};
@@ -269,7 +269,7 @@ impl Context {
         self.swapchain.as_ref().expect("no swapchain present")
     }
 
-    pub fn surface_format(&self) -> vk::Format {
+    pub fn surface_format(&self) -> ImageFormat {
         let (swapchain, _) = self.swapchain();
         swapchain.format
     }

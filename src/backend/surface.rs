@@ -3,8 +3,8 @@ use std::slice;
 use ash::{khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
-use super::resource;
 use super::sync::Access;
+use super::{resource, ImageFormat};
 use super::{Device, Error, Image, Instance};
 
 pub struct Swapchain {
@@ -12,7 +12,7 @@ pub struct Swapchain {
     swapchain_loader: khr::swapchain::Device,
     surface: vk::SurfaceKHR,
     swapchain: vk::SwapchainKHR,
-    pub format: vk::Format,
+    pub format: ImageFormat,
 }
 
 impl Swapchain {
@@ -117,7 +117,7 @@ fn create_swapchain_images(
     device: &Device,
     loader: &khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
-    format: vk::Format,
+    format: ImageFormat,
     extent: vk::Extent2D,
 ) -> Result<Vec<Image>, Error> {
     let images = unsafe { loader.get_swapchain_images(swapchain)? };
@@ -128,7 +128,6 @@ fn create_swapchain_images(
             Ok(Image {
                 view: resource::create_image_view(device, image, format, 1)?,
                 layout: vk::ImageLayout::UNDEFINED,
-                aspect: vk::ImageAspectFlags::COLOR,
                 extent: extent.into(),
                 access: Access::default(),
                 swapchain_index: Some(index as u32),
@@ -149,7 +148,7 @@ fn create_swapchain(
     surface_loader: &khr::surface::Instance,
     extent: vk::Extent2D,
     old: vk::SwapchainKHR,
-) -> Result<(vk::SwapchainKHR, vk::Format), Error> {
+) -> Result<(vk::SwapchainKHR, ImageFormat), Error> {
     let surface_capabilities = unsafe {
         surface_loader.get_physical_device_surface_capabilities(device.physical_device, surface)?
     };
@@ -160,7 +159,7 @@ fn create_swapchain(
         .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
         .image_array_layers(1)
         .image_usage(swapchain_image_usages())
-        .image_format(format)
+        .image_format(format.into())
         .queue_family_indices(slice::from_ref(&device.queue_family_index))
         .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
         .image_extent(extent)
@@ -233,21 +232,22 @@ fn swapchain_format(
     loader: &khr::surface::Instance,
     surface: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
-) -> Result<vk::Format, Error> {
+) -> Result<ImageFormat, Error> {
     let formats = unsafe { loader.get_physical_device_surface_formats(physical_device, surface)? };
     if formats.len() == 1
         && formats
             .first()
             .is_some_and(|format| format.format == vk::Format::UNDEFINED)
     {
-        return Ok(vk::Format::R8G8B8A8_UNORM);
+        return Ok(ImageFormat::Rgba8Unorm);
     }
-    let format = formats
+    formats
         .into_iter()
-        .find(|format| {
-            format.format == vk::Format::R8G8B8A8_UNORM
-                || format.format == vk::Format::B8G8R8A8_UNORM
+        .find_map(|format| {
+            (format.format == vk::Format::R8G8B8A8_UNORM)
+                .then_some(ImageFormat::Rgba8Unorm)
+                .or((format.format == vk::Format::B8G8R8A8_UNORM)
+                    .then_some(ImageFormat::Bgra8Unorm))
         })
-        .ok_or(Error::NoSuitableSurface)?;
-    Ok(format.format)
+        .ok_or(Error::NoSuitableSurface)
 }

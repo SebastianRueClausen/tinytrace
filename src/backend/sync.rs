@@ -53,7 +53,7 @@ impl Context {
             .map(|(handle, access)| {
                 let image = self.image_mut(handle);
                 let subresource_range = vk::ImageSubresourceRange::default()
-                    .aspect_mask(image.aspect)
+                    .aspect_mask(image.format.aspect())
                     .base_mip_level(0)
                     .level_count(image.mip_level_count)
                     .base_array_layer(0)

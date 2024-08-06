@@ -111,13 +111,6 @@ impl Buffer {
     }
 }
 
-fn format_aspect(format: vk::Format) -> vk::ImageAspectFlags {
-    match format {
-        vk::Format::D32_SFLOAT => vk::ImageAspectFlags::DEPTH,
-        _ => vk::ImageAspectFlags::COLOR,
-    }
-}
-
 fn format_features(
     instance: &Instance,
     device: &Device,
@@ -131,10 +124,60 @@ fn format_features(
     properties.format_properties.optimal_tiling_features
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageFormat {
+    Rgba8Srgb = vk::Format::R8G8B8A8_SRGB.as_raw() as isize,
+    Rgba8Unorm = vk::Format::R8G8B8A8_UNORM.as_raw() as isize,
+    Bgra8Unorm = vk::Format::B8G8R8A8_UNORM.as_raw() as isize,
+    Rgba32Float = vk::Format::R32G32B32A32_SFLOAT.as_raw() as isize,
+    RgBc5Unorm = vk::Format::BC5_UNORM_BLOCK.as_raw() as isize,
+    RgbBc1Srgb = vk::Format::BC1_RGB_SRGB_BLOCK.as_raw() as isize,
+    RgbaBc1Srgb = vk::Format::BC1_RGBA_SRGB_BLOCK.as_raw() as isize,
+}
+
+pub struct FormatInfo {
+    pub block_extent: vk::Extent2D,
+    pub bytes_per_block: vk::DeviceSize,
+}
+
+impl FormatInfo {
+    fn new(block_extent: vk::Extent2D, bytes_per_block: vk::DeviceSize) -> Self {
+        Self {
+            block_extent,
+            bytes_per_block,
+        }
+    }
+}
+
+impl From<ImageFormat> for vk::Format {
+    fn from(format: ImageFormat) -> Self {
+        vk::Format::from_raw(format as i32)
+    }
+}
+
+impl ImageFormat {
+    pub fn info(self) -> FormatInfo {
+        match self {
+            Self::Rgba8Srgb | Self::Rgba8Unorm | Self::Bgra8Unorm => {
+                FormatInfo::new(vk::Extent2D::default().width(1).height(1), 4)
+            }
+            Self::Rgba32Float => FormatInfo::new(vk::Extent2D::default().width(1).height(1), 16),
+            Self::RgBc5Unorm => FormatInfo::new(vk::Extent2D::default().width(4).height(4), 16),
+            Self::RgbBc1Srgb | Self::RgbaBc1Srgb => {
+                FormatInfo::new(vk::Extent2D::default().width(4).height(4), 8)
+            }
+        }
+    }
+
+    pub fn aspect(self) -> vk::ImageAspectFlags {
+        vk::ImageAspectFlags::COLOR
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageRequest {
     pub extent: vk::Extent3D,
-    pub format: vk::Format,
+    pub format: ImageFormat,
     pub mip_level_count: u32,
     pub memory_location: MemoryLocation,
 }
@@ -144,8 +187,7 @@ pub struct Image {
     pub image: vk::Image,
     pub view: vk::ImageView,
     pub extent: vk::Extent3D,
-    pub format: vk::Format,
-    pub aspect: vk::ImageAspectFlags,
+    pub format: ImageFormat,
     pub mip_level_count: u32,
     pub swapchain_index: Option<u32>,
     pub layout: vk::ImageLayout,
@@ -164,12 +206,12 @@ impl Context {
         let mut usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::SAMPLED;
-        let format_features = format_features(&self.instance, &self.device, request.format);
+        let format_features = format_features(&self.instance, &self.device, request.format.into());
         if format_features.contains(vk::FormatFeatureFlags::STORAGE_IMAGE) {
             usage_flags |= vk::ImageUsageFlags::STORAGE;
         }
         let image_info = vk::ImageCreateInfo::default()
-            .format(request.format)
+            .format(request.format.into())
             .extent(request.extent)
             .mip_levels(request.mip_level_count)
             .array_layers(1)
@@ -188,15 +230,14 @@ impl Context {
             self.device.bind_image_memory(image, memory, index.offset)?;
         }
         let image = Image {
-            access: Access::default(),
-            timestamp: 0,
             view: create_image_view(&self.device, image, request.format, request.mip_level_count)?,
-            aspect: format_aspect(request.format),
             extent: request.extent,
             format: request.format,
             mip_level_count: request.mip_level_count,
             layout: vk::ImageLayout::UNDEFINED,
             swapchain_index: None,
+            access: Access::default(),
+            timestamp: 0,
             usage_flags,
             image,
         };
@@ -210,7 +251,7 @@ impl Image {
         let FormatInfo {
             block_extent,
             bytes_per_block,
-        } = format_info(self.format);
+        } = self.format.info();
         let block_count =
             (extent.width / block_extent.width) * (extent.height / block_extent.height);
         block_count as vk::DeviceSize * bytes_per_block
@@ -250,52 +291,22 @@ pub fn mip_level_offset(offset: vk::Offset3D, level: u32) -> vk::Offset3D {
     }
 }
 
-pub struct FormatInfo {
-    pub block_extent: vk::Extent2D,
-    pub bytes_per_block: vk::DeviceSize,
-}
-
-pub fn format_info(format: vk::Format) -> FormatInfo {
-    match format {
-        vk::Format::R8G8B8A8_SRGB => FormatInfo {
-            block_extent: vk::Extent2D::default().width(1).height(1),
-            bytes_per_block: 4,
-        },
-        vk::Format::R32G32B32A32_SFLOAT => FormatInfo {
-            block_extent: vk::Extent2D::default().width(1).height(1),
-            bytes_per_block: 16,
-        },
-        vk::Format::BC5_UNORM_BLOCK => FormatInfo {
-            block_extent: vk::Extent2D::default().width(4).height(4),
-            bytes_per_block: 16,
-        },
-        vk::Format::BC1_RGBA_SRGB_BLOCK | vk::Format::BC1_RGB_SRGB_BLOCK => FormatInfo {
-            block_extent: vk::Extent2D::default().width(4).height(4),
-            bytes_per_block: 8,
-        },
-        _ => {
-            panic!("unsupported format");
-        }
-    }
-}
-
 pub fn create_image_view(
     device: &Device,
     image: vk::Image,
-    format: vk::Format,
+    format: ImageFormat,
     mip_level_count: u32,
 ) -> Result<vk::ImageView, Error> {
-    let aspect_mask = format_aspect(format);
     let image_view_info = vk::ImageViewCreateInfo::default()
         .image(image)
-        .format(format)
+        .format(format.into())
         .view_type(vk::ImageViewType::TYPE_2D)
         .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: format.aspect(),
             base_mip_level: 0,
             level_count: mip_level_count,
             base_array_layer: 0,
             layer_count: 1,
-            aspect_mask,
         });
     unsafe {
         device

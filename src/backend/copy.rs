@@ -125,8 +125,13 @@ impl Context {
                 0,
                 |buffer_offset, (image, extent, offset, data, level)| unsafe {
                     let image = self.image(&image);
-                    let image_copy =
-                        buffer_image_copy(image.aspect, level, buffer_offset, offset, extent);
+                    let image_copy = buffer_image_copy(
+                        image.format.aspect(),
+                        level,
+                        buffer_offset,
+                        offset,
+                        extent,
+                    );
                     self.device.cmd_copy_buffer_to_image(
                         self.command_buffer().buffer,
                         self.buffer(&scratch).buffer,
@@ -186,7 +191,7 @@ impl Context {
                     let buffer_offset = scratch_offset + image_offset;
                     image_offset += image.mip_byte_size(level);
                     buffer_image_copy(
-                        image.aspect,
+                        image.format.aspect(),
                         level,
                         buffer_offset,
                         vk::Offset3D::default(),

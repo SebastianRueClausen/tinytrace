@@ -35,6 +35,7 @@ impl Device {
         let mut features = vk::PhysicalDeviceFeatures2::default().features({
             vk::PhysicalDeviceFeatures::default()
                 .sampler_anisotropy(true)
+                .shader_int64(true)
                 .shader_int16(true)
         });
         let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::default()
@@ -45,6 +46,7 @@ impl Device {
             .descriptor_binding_variable_descriptor_count(true)
             .runtime_descriptor_array(true)
             .shader_float16(true)
+            .shader_buffer_int64_atomics(true)
             .timeline_semaphore(true);
         let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
             .synchronization2(true)
@@ -172,4 +174,5 @@ const EXTENSIONS: &[*const ffi::c_char] = &[
     khr::ray_query::NAME.as_ptr(),
     khr::ray_tracing_position_fetch::NAME.as_ptr(),
     khr::spirv_1_4::NAME.as_ptr(),
+    khr::shader_atomic_int64::NAME.as_ptr(),
 ];

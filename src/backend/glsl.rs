@@ -10,6 +10,8 @@ const PRELUDE: &str = r#"
 #extension GL_EXT_shader_explicit_arithmetic_types_int16: require
 #extension GL_EXT_ray_query: require
 #extension GL_EXT_ray_tracing_position_fetch: require
+#extension GL_ARB_gpu_shader_int64: require
+#extension GL_NV_shader_atomic_int64: require
 "#;
 
 fn render_binding(name: &str, ty: &BindingType, index: u32) -> String {

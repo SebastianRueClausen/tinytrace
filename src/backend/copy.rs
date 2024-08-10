@@ -145,6 +145,21 @@ impl Context {
         Ok(self)
     }
 
+    /// Fill whole buffer with `value`.
+    pub fn fill_buffer(&mut self, buffer: &Handle<Buffer>, value: u32) -> Result<&mut Self, Error> {
+        self.access_resources(&[], &[(buffer.clone(), WRITE_ACCESS)], &[], &[])?;
+        unsafe {
+            self.device.cmd_fill_buffer(
+                self.command_buffer().buffer,
+                self.buffer(buffer).buffer,
+                0,
+                vk::WHOLE_SIZE,
+                value,
+            );
+        }
+        Ok(self)
+    }
+
     /// Download data from buffers and images.
     ///
     /// The memory of images with multiple mips is densely packed. Note that this ends the frame.

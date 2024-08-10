@@ -14,9 +14,13 @@ struct Generator {
     uint state;
 };
 
-Generator init_generator(uvec2 pixel, uvec2 resolution, uint frame) {
-    uint seed = (pixel.x + pixel.y * resolution.x) ^ jenkins_hash(frame);
+Generator init_generator_from_index(uint index, uint frame) {
+    uint seed = index ^ jenkins_hash(frame);
     return Generator(jenkins_hash(seed));
+}
+
+Generator init_generator_from_pixel(uvec2 pixel, uvec2 resolution, uint frame) {
+    return init_generator_from_index(pixel.x + pixel.y * resolution.x, frame);
 }
 
 float uint_to_unit_float(uint value) {

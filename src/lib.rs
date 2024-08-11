@@ -21,7 +21,7 @@ use backend::{
 use camera::Camera;
 use error::Error;
 use glam::{Mat4, UVec2, Vec2, Vec4};
-use integrate::Integrator;
+use integrate::{HashGridLayout, Integrator};
 use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use scene::Scene;
@@ -121,6 +121,8 @@ impl Renderer {
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
+            reservoir_hash_grid: self.integrator.reservoirs.layout,
+            reservoir_update_hash_grid: self.integrator.reservoir_updates.layout,
             proj_view,
             view,
             proj,
@@ -191,7 +193,7 @@ fn create_render_target(
 }
 
 #[repr(C)]
-#[derive(bytemuck::NoUninit, Clone, Copy, Default)]
+#[derive(bytemuck::NoUninit, bytemuck::AnyBitPattern, Debug, Clone, Copy, Default)]
 struct Constants {
     view: Mat4,
     proj: Mat4,
@@ -199,11 +201,13 @@ struct Constants {
     inverse_view: Mat4,
     inverse_proj: Mat4,
     camera_position: Vec4,
-    screen_size: UVec2,
     frame_index: u32,
     accumulated_frame_count: u32,
     sample_count: u32,
     bounce_count: u32,
+    reservoir_hash_grid: HashGridLayout,
+    reservoir_update_hash_grid: HashGridLayout,
+    screen_size: UVec2,
     padding: [u32; 2],
 }
 

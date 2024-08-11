@@ -14,14 +14,19 @@ use crate::{asset, Context};
 pub(super) struct HashGrid {
     pub hashes: Handle<Buffer>,
     pub values: Handle<Buffer>,
+    pub layout: HashGridLayout,
 }
 
 impl HashGrid {
-    pub(super) fn new(context: &mut Context, count: usize, value_size: usize) -> Result<Self> {
+    pub(super) fn new(
+        context: &mut Context,
+        value_size: usize,
+        layout: HashGridLayout,
+    ) -> Result<Self> {
         let hashes = context.create_buffer(
             Lifetime::Scene,
             &BufferRequest {
-                size: (mem::size_of::<u64>() * count) as vk::DeviceSize,
+                size: (mem::size_of::<u64>() * layout.capacity as usize) as vk::DeviceSize,
                 ty: BufferType::Storage,
                 memory_location: MemoryLocation::Device,
             },
@@ -29,12 +34,16 @@ impl HashGrid {
         let values = context.create_buffer(
             Lifetime::Scene,
             &BufferRequest {
-                size: (value_size * count) as vk::DeviceSize,
+                size: (value_size * layout.capacity as usize) as vk::DeviceSize,
                 ty: BufferType::Storage,
                 memory_location: MemoryLocation::Device,
             },
         )?;
-        let hash_grid = Self { hashes, values };
+        let hash_grid = Self {
+            hashes,
+            values,
+            layout,
+        };
         hash_grid.clear(context)?;
         Ok(hash_grid)
     }
@@ -44,6 +53,15 @@ impl HashGrid {
         context.fill_buffer(&self.values, 0)?;
         Ok(())
     }
+}
+
+#[repr(C)]
+#[derive(Default, Debug, Clone, Copy, bytemuck::NoUninit, bytemuck::AnyBitPattern)]
+pub struct HashGridLayout {
+    scene_scale: f32,
+    capacity: u32,
+    bucket_size: u32,
+    padding: u32,
 }
 
 pub struct Integrator {
@@ -132,9 +150,15 @@ impl Integrator {
                 bindings,
             },
         )?;
+        let hash_grid_layout = |bucket_size, capacity| HashGridLayout {
+            padding: 0,
+            scene_scale: 10.0,
+            bucket_size,
+            capacity,
+        };
         Ok(Self {
-            reservoirs: HashGrid::new(context, 0xfffff, 60)?,
-            reservoir_updates: HashGrid::new(context, 1024, 212)?,
+            reservoirs: HashGrid::new(context, 60, hash_grid_layout(16, 0xffff))?,
+            reservoir_updates: HashGrid::new(context, 836, hash_grid_layout(1, 1024))?,
             update_reservoirs,
             integrate,
         })

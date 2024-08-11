@@ -20,16 +20,15 @@ struct GridCell {
 };
 
 struct HashGrid {
-    vec3 camera_position;
     float scene_scale;
-    uint capacity, bucket_size;
+    uint capacity, bucket_size, padding;
 };
 
-GridCell hash_grid_cell(vec3 position, in HashGrid hash_grid) {
-    float distance_squared = dot(hash_grid.camera_position - position, hash_grid.camera_position - position);
+GridCell hash_grid_cell(vec3 position, vec3 camera_position, vec3 offset, in HashGrid hash_grid) {
+    float distance_squared = dot(camera_position - position, camera_position - position);
     uint grid_level = uint(clamp(0.5 * log2(distance_squared) + LEVEL_BIAS, 1.0, float(LEVEL_BIT_MASK)));
     float voxel_size = pow(2.0, grid_level) / (hash_grid.scene_scale * pow(2.0, LEVEL_BIAS));
-    ivec3 grid_position = ivec3(floor((position + vec3(POSITION_BIAS)) / voxel_size));
+    ivec3 grid_position = ivec3(floor((position + vec3(POSITION_BIAS)) / voxel_size + offset));
     return GridCell(grid_position, grid_level);
 }
 
@@ -48,17 +47,9 @@ uint hash_grid_hash(uint64_t key) {
 
 #endif
 
-#ifndef HASH_GRID_BUFFER
-#error "HASH_GRID_BUFFER not defined"
-#endif
-
-#ifndef HASH_GRID_INSERT
-#error "HASH_GRID_INSERT not defined"
-#endif
-
-#ifndef HASH_GRID_FIND
-#error "HASH_GRID_FIND not defined"
-#endif
+#ifdef HASH_GRID_BUFFER
+#ifdef HASH_GRID_INSERT
+#ifdef HASH_GRID_FIND
 
 bool HASH_GRID_INSERT(in HashGrid hash_grid, uint64_t key, out uint index) {
     uint base_slot = min(hash_grid_hash(key) % hash_grid.capacity, hash_grid.capacity - hash_grid.bucket_size);
@@ -84,3 +75,7 @@ bool HASH_GRID_FIND(in HashGrid hash_grid, uint64_t key, out uint index) {
     }
     return false;
 }
+
+#endif
+#endif
+#endif

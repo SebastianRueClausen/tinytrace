@@ -25,13 +25,10 @@ vec3 bounce_surface_normal(in BounceSurface bounce_surface) {
     return vec3(octahedron_decode(vec2(bounce_surface.normal)));
 }
 
-// 48 bytes.
+// 52 bytes.
 struct Path {
-    // 32 bytes.
     BounceSurface origin, destination;
-    // 12 bytes.
     float radiance[3];
-    // 4 bytes.
     Generator generator;
 };
 
@@ -49,22 +46,21 @@ struct Reservoir {
     uint sample_count;
 };
 
-void update_reservoir_weight(inout Reservoir reservoir) {
-    reservoir.weight =
-        reservoir.weight_sum / (reservoir.sample_count * path_target_function(reservoir.path));
-}
+const uint RESERVOIR_MAX_SAMPLE_COUNT = 30;
+const uint RESERVOIR_UPDATE_COUNT = 16;
 
-const uint RESERVOIR_UPDATE_COUNT = 4;
-
-// 212 bytes.
+// 836 bytes.
 struct ReservoirUpdate {
-    // 192 bytes.
     Path paths[RESERVOIR_UPDATE_COUNT];
-    // 16 bytes.
     float weights[RESERVOIR_UPDATE_COUNT];
-    // 4 bytes with padding.
     uint update_count;
 };
+
+bool reservoir_is_valid(in Reservoir reservoir) {
+    // The reservoir must have a valid sample if the weight sum isn't 0 as it only selects a sample
+    // if the weight isn't 0 and keeps that until it sees another valid sample.
+    return reservoir.weight_sum > 0.0;
+}
 
 void initialize_reservoir(out Reservoir reservoir) {
     reservoir.weight_sum = 0.0;
@@ -75,13 +71,21 @@ void initialize_reservoir(out Reservoir reservoir) {
 void update_reservoir(inout Reservoir reservoir, inout Generator generator, Path path, float weight) {
     reservoir.weight_sum += weight;
     reservoir.sample_count += 1;
-    if (random_float(generator) < weight / reservoir.weight_sum) {
+    if (reservoir.weight_sum > 0 && random_float(generator) < weight / reservoir.weight_sum) {
         reservoir.path = path;
     }
 }
 
-void merge_reservoirs(inout Reservoir reservoir, inout Generator generator, Reservoir other, float p_hat) {
-    update_reservoir(reservoir, generator, other.path, p_hat * other.weight * other.sample_count);
+void update_reservoir_weight(inout Reservoir reservoir) {
+    float target_function = path_target_function(reservoir.path);
+    if (target_function * reservoir.sample_count > 0) {
+        reservoir.weight = reservoir.weight_sum / (reservoir.sample_count * target_function);
+    }
+}
+
+void merge_reservoirs(inout Reservoir reservoir, inout Generator generator, Reservoir other) {
+    float target_function = path_target_function(other.path);
+    update_reservoir(reservoir, generator, other.path, target_function * other.weight * other.sample_count);
     reservoir.sample_count += other.sample_count;
 }
 

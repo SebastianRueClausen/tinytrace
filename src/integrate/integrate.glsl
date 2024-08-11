@@ -1,4 +1,3 @@
-
 #define HASH_GRID_BUFFER reservoir_hashes
 #define HASH_GRID_INSERT insert_reservoir
 #define HASH_GRID_FIND find_reservoir
@@ -160,15 +159,6 @@ vec2 pixel_ndc(uvec2 pixel_index, inout Generator generator) {
     return ((vec2(pixel_index) + offset) / vec2(constants.screen_size)) * 2.0 - 1.0;
 }
 
-HashGrid create_hash_grid(uint bucket_size, uint capacity) {
-    HashGrid hash_grid;
-    hash_grid.camera_position = constants.camera_position.xyz;
-    hash_grid.scene_scale = 10.0;
-    hash_grid.bucket_size = bucket_size;
-    hash_grid.capacity = capacity;
-    return hash_grid;
-}
-
 struct ResamplePath {
     Path path;
     float pdf;
@@ -181,6 +171,14 @@ struct TracePathConfig {
     bool resample_path;
 };
 
+HashGrid create_hash_grid(uint bucket_size, uint capacity) {
+    HashGrid hash_grid;
+    hash_grid.scene_scale = 10.0;
+    hash_grid.bucket_size = bucket_size;
+    hash_grid.capacity = capacity;
+    return hash_grid;
+}
+
 vec3 trace_path(
     Ray ray,
     inout Generator generator,
@@ -190,6 +188,7 @@ vec3 trace_path(
 ) {
     vec3 accumulated = vec3(0.0), attenuation = vec3(1.0);
     vec3 previous_normal, resample_attenuation = vec3(1.0);
+    bool previous_was_diffuse = false;
 
     resample_path.is_found = !config.find_resample_path;
     if (config.find_resample_path) {
@@ -252,19 +251,48 @@ vec3 trace_path(
         surface.view_direction = normalize(ray.origin - hit.world_position);
         surface.normal_dot_view = clamp(dot(surface_basis.normal, surface.view_direction), 0.0001, 1.0);
 
-        vec3 local_scatter, local_half_vector;
         vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
-        if (random_float(generator) > surface.metallic) {
-            local_scatter = cosine_hemisphere_sample(generator);
-            local_half_vector = normalize(local_scatter + local_view);
-        } else {
-            local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+
+        float pdf = 0.0;
+        vec3 local_scatter, local_half_vector;
+        if (config.resample_path && surface.roughness >= 0.25) {
+            config.resample_path = false;
+            vec3 offset = random_vec3(generator) * 2.0 - 1.0;
+            uint64_t key = hash_grid_key(hash_grid_cell(
+                hit.world_position, constants.camera_position.xyz, offset, constants.reservoir_hash_grid
+            ));
+            uint reservoir_index;
+            if (find_reservoir(constants.reservoir_hash_grid, key, reservoir_index)) {
+                Reservoir reservoir = reservoirs[reservoir_index];
+                // Reconnect with sample the sample in the reservoir if it is valid.
+                if (reservoir_is_valid(reservoir)) {
+                    generator = reservoir.path.generator;
+                    local_scatter = transform_from_basis(
+                        surface_basis,
+                        normalize(bounce_surface_position(reservoir.path.destination) - hit.world_position)
+                    );
+                    local_half_vector = normalize(local_scatter + local_view);
+                    pdf = 1.0 / reservoir.weight;
+                }
+            }
+        }
+
+        if (pdf == 0.0) {
+            if (random_float(generator) > surface.metallic) {
+                local_scatter = cosine_hemisphere_sample(generator);
+                local_half_vector = normalize(local_scatter + local_view);
+            } else {
+                local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+            }
+            pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
+                + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
         }
 
         if (!resample_path.is_found && bounce != 0 && surface.roughness >= 0.25) {
             resample_path.path.origin = create_bounce_surface(ray.origin, previous_normal);
             resample_path.path.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
             resample_path.path.generator = generator;
+            resample_path.pdf = pdf;
             resample_path.is_found = true;
         }
 
@@ -279,13 +307,10 @@ vec3 trace_path(
         scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
 
         vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
-        float pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
-            + (1.0 - surface.metallic) * cosine_hemisphere_pdf(scatter.normal_dot_scatter);
 
         accumulated += emissive * attenuation;
 
         if (resample_path.is_found) {
-            resample_path.pdf = pdf;
             for (uint i = 0; i < 3; i++) {
                 resample_path.path.radiance[i] += emissive[i] * resample_attenuation[i];
             }
@@ -313,15 +338,12 @@ void main() {
         return;
     }
 
-    HashGrid reservoir_hash_grid = create_hash_grid(16, 0xffff);
-    HashGrid reservoir_update_hash_grid = create_hash_grid(1, 1024);
-
     Generator generator = init_generator_from_pixel(pixel_index, constants.screen_size, constants.frame_index);
 
+    bool resample = constants.frame_index % 2 == 1;
+    TracePathConfig trace_path_config = TracePathConfig(constants.bounce_count, !resample, resample);
+
     vec3 accumulated = vec3(0.0);
-
-    TracePathConfig trace_path_config = TracePathConfig(constants.bounce_count, true, false);
-
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
         vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
@@ -330,12 +352,13 @@ void main() {
         accumulated += trace_path(ray, generator, ndc, trace_path_config, resample_path);
 
         if (resample_path.is_found && sample_index == 0) {
-            bool has_radiance = resample_path.path.radiance[0] != 0.0
-                || resample_path.path.radiance[1] != 0.0
-                || resample_path.path.radiance[2] != 0.0;
-            if (!has_radiance) continue;
-            uint64_t key = hash_grid_key(hash_grid_cell(bounce_surface_position(resample_path.path.origin), reservoir_update_hash_grid));
-            uint slot = hash_grid_hash(key) % reservoir_update_hash_grid.capacity;
+            uint64_t key = hash_grid_key(hash_grid_cell(
+                bounce_surface_position(resample_path.path.origin),
+                constants.camera_position.xyz,
+                vec3(0.0),
+                constants.reservoir_update_hash_grid
+            ));
+            uint slot = hash_grid_hash(key) % constants.reservoir_update_hash_grid.capacity;
             uint update_index = atomicAdd(reservoir_updates[slot].update_count, 1);
             if (update_index < RESERVOIR_UPDATE_COUNT) {
                 reservoir_updates[slot].paths[update_index] = resample_path.path;

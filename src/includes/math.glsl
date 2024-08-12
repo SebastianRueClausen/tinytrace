@@ -23,4 +23,8 @@ float saturate(float value) {
     return clamp(value, 0.0, 1.0);
 }
 
+float pow2(float value) {
+    return value * value;
+}
+
 #endif

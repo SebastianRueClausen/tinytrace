@@ -243,9 +243,7 @@ vec3 trace_path(
         // Heuristic for mip level.
         mip_level += surface.roughness;
 
-        float dielectric_specular = (material.ior - 1.0) / (material.ior + 1.0);
-        dielectric_specular *= dielectric_specular;
-        surface.fresnel_min = mix(vec3(dielectric_specular), surface.albedo, surface.metallic);
+        surface.fresnel_min = fresnel_min(material.ior, surface.albedo, surface.metallic);
         surface.fresnel_max = 1.0;
 
         surface.view_direction = normalize(ray.origin - hit.world_position);
@@ -277,10 +275,14 @@ vec3 trace_path(
             }
         }
 
+        bool sampled_diffuse = false;
+        Generator before_sample_generator = generator;
+
         if (pdf == 0.0) {
             if (random_float(generator) > surface.metallic) {
                 local_scatter = cosine_hemisphere_sample(generator);
                 local_half_vector = normalize(local_scatter + local_view);
+                sampled_diffuse = true;
             } else {
                 local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
             }
@@ -288,12 +290,25 @@ vec3 trace_path(
                 + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
         }
 
-        if (!resample_path.is_found && bounce != 0 && surface.roughness >= 0.25) {
+        // Only find a simple resample path per trace for now
+        // (though it would be possible to find multiple).
+        bool can_form_resample_path = !resample_path.is_found
+            // It isn't possible to reconnect the first bounce.
+            && bounce != 0
+            // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
+            // reconnecting doesn't cause the BRDF to become zero.
+            && previous_was_diffuse
+            // The current bounce must be diffuse meaning that it samples the diffuse lope. This
+            // is required to create a successfull reconnecting because diffuse sampling doesn't
+            // depend on the incidence vector, which will be different because of the reconnection.
+            && sampled_diffuse;
+        if (can_form_resample_path) {
             resample_path.path.origin = create_bounce_surface(ray.origin, previous_normal);
-            resample_path.path.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
-            resample_path.path.generator = generator;
-            resample_path.pdf = pdf;
+            resample_path.path.destination =
+                create_bounce_surface(hit.world_position, surface_basis.normal);
+            resample_path.path.generator = before_sample_generator;
             resample_path.is_found = true;
+            resample_path.pdf = pdf;
         }
 
         ray.direction = transform_to_basis(surface_basis, local_scatter);
@@ -328,17 +343,17 @@ vec3 trace_path(
         }
 
         previous_normal = surface_basis.normal;
+        previous_was_diffuse = surface.roughness > 0.25;
     }
     return accumulated;
 }
 
 void main() {
     uvec2 pixel_index = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(pixel_index, constants.screen_size))) {
-        return;
-    }
+    if (any(greaterThanEqual(pixel_index, constants.screen_size))) return;
 
-    Generator generator = init_generator_from_pixel(pixel_index, constants.screen_size, constants.frame_index);
+    Generator generator =
+        init_generator_from_pixel(pixel_index, constants.screen_size, constants.frame_index);
 
     bool resample = constants.frame_index % 2 == 1;
     TracePathConfig trace_path_config = TracePathConfig(constants.bounce_count, !resample, resample);
@@ -362,7 +377,8 @@ void main() {
             uint update_index = atomicAdd(reservoir_updates[slot].update_count, 1);
             if (update_index < RESERVOIR_UPDATE_COUNT) {
                 reservoir_updates[slot].paths[update_index] = resample_path.path;
-                reservoir_updates[slot].weights[update_index] = path_target_function(resample_path.path) / resample_path.pdf;
+                reservoir_updates[slot].weights[update_index] =
+                    path_target_function(resample_path.path) / resample_path.pdf;
             }
         }
     }

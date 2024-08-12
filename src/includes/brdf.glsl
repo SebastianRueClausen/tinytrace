@@ -3,6 +3,7 @@
 
 #include "constants"
 #include "random"
+#include "math"
 
 // The cutoff for roughness where a material is treated as a perfect mirror.
 const float ROUGHNESS_DELTA_CUTOFF = 0.01;
@@ -87,6 +88,10 @@ vec3 burley_diffuse(SurfaceProperties surface, ScatterProperties scatter) {
     vec3 view_scatter  = fresnel_schlick(vec3(1.0), surface.fresnel_max, surface.normal_dot_view);
     vec3 diffuse_color = surface.albedo * (1.0 - surface.metallic);
     return diffuse_color * light_scatter * view_scatter * (1.0 / PI);
+}
+
+vec3 fresnel_min(float ior, vec3 albedo, float metallic) {
+    return mix(vec3(pow2((ior - 1.0) / (ior + 1.0))), albedo, metallic);
 }
 
 #endif

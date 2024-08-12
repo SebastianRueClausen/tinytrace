@@ -3,6 +3,7 @@
 
 #include "random"
 #include "octahedron"
+#include "math"
 
 // 16 bytes.
 struct BounceSurface {

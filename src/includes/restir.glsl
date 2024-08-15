@@ -48,7 +48,7 @@ struct Reservoir {
 };
 
 const uint RESERVOIR_MAX_SAMPLE_COUNT = 30;
-const uint RESERVOIR_UPDATE_COUNT = 16;
+const uint RESERVOIR_UPDATE_COUNT = 64;
 
 // 836 bytes.
 struct ReservoirUpdate {
@@ -88,6 +88,46 @@ void merge_reservoirs(inout Reservoir reservoir, inout Generator generator, Rese
     float target_function = path_target_function(other.path);
     update_reservoir(reservoir, generator, other.path, target_function * other.weight * other.sample_count);
     reservoir.sample_count += other.sample_count;
+}
+
+const uint RESERVOIR_POOL_SIZE = 4;
+
+struct ReservoirPool {
+    Reservoir reservoirs[RESERVOIR_POOL_SIZE];
+};
+
+Reservoir determine_reservoir_from_pool(in ReservoirPool pool, inout Generator generator) {
+    Reservoir reservoir = pool.reservoirs[0];
+    for (uint index = 1; index < RESERVOIR_POOL_SIZE; index++) {
+        merge_reservoirs(reservoir, generator, pool.reservoirs[index]);
+    }
+    return reservoir;
+}
+
+float path_jacobian(vec3 sample_position, Path path) {
+    vec3 destination_position = bounce_surface_position(path.destination);
+    vec3 destination_normal = bounce_surface_normal(path.destination);
+
+    vec3 sample_to_destination = sample_position - destination_position;
+    float sample_distance = length(sample_to_destination);
+    float sample_cos_phi = saturate(abs(dot(sample_to_destination, destination_normal) / sample_distance));
+
+    vec3 path_to_destination = bounce_surface_position(path.origin) - destination_position;
+    float path_distance = length(path_to_destination);
+    float path_cos_phi = saturate(abs(dot(path_to_destination, destination_normal) / path_distance));
+
+    float div = path_cos_phi * pow2(sample_distance);
+    return div > 0.0 ? sample_cos_phi * pow2(path_distance) / div : 0.0;
+}
+
+const float PATH_RECONNECT_DISTANCE_THRESHOLD = 0.1;
+const float PATH_RECONNECT_COS_THETA_THRESHOLD = 0.906;
+
+bool can_reconnect_to_path(vec3 sample_position, vec3 sample_normal, Path path) {
+    float distance = length(sample_position - bounce_surface_position(path.origin));
+    float cos_theta = dot(sample_normal, bounce_surface_normal(path.origin));
+    return distance < PATH_RECONNECT_DISTANCE_THRESHOLD
+        && cos_theta > PATH_RECONNECT_COS_THETA_THRESHOLD;
 }
 
 #endif

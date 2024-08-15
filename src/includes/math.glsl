@@ -27,4 +27,8 @@ float pow2(float value) {
     return value * value;
 }
 
+float length_squared(vec2 value) {
+    return dot(value, value);
+}
+
 #endif

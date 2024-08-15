@@ -1,6 +1,6 @@
-#define HASH_GRID_BUFFER reservoir_hashes
-#define HASH_GRID_INSERT insert_reservoir
-#define HASH_GRID_FIND find_reservoir
+#define HASH_GRID_BUFFER reservoir_pool_hashes
+#define HASH_GRID_INSERT insert_reservoir_pool
+#define HASH_GRID_FIND find_reservoir_pool
 #include "hash_grid"
 
 void main() {
@@ -16,16 +16,22 @@ void main() {
         uint64_t key = hash_grid_key(hash_grid_cell(
             origin_position, constants.camera_position.xyz, vec3(0.0), constants.reservoir_hash_grid
         ));
-        uint reservoir_index;
-        if (insert_reservoir(constants.reservoir_hash_grid, key, reservoir_index)) {
+        uint reservoir_pool_index;
+        if (insert_reservoir_pool(constants.reservoir_hash_grid, key, reservoir_pool_index)) {
             float weight = reservoir_updates[update_index].weights[path_index];
+            // Setup initial reservoir.
             Reservoir reservoir;
             initialize_reservoir(reservoir);
             update_reservoir(reservoir, generator, path, weight);
-            merge_reservoirs(reservoir, generator, reservoirs[reservoir_index]);
+
+            // Select random reservoir in pool to update.
+            uint reservoir_index = random_uint(generator, RESERVOIR_POOL_SIZE);
+
+            // Merge with random existing reservoir.
+            merge_reservoirs(reservoir, generator, reservoir_pools[reservoir_pool_index].reservoirs[reservoir_index]);
             update_reservoir_weight(reservoir);
             reservoir.sample_count = min(reservoir.sample_count, RESERVOIR_MAX_SAMPLE_COUNT);
-            reservoirs[reservoir_index] = reservoir;
+            reservoir_pools[reservoir_pool_index].reservoirs[reservoir_index] = reservoir;
         }
     }
 }

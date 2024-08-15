@@ -1,3 +1,5 @@
+mod restir;
+
 use std::mem;
 
 use ash::vk;
@@ -67,7 +69,7 @@ pub struct HashGridLayout {
 pub struct Integrator {
     pub integrate: Handle<Shader>,
     pub update_reservoirs: Handle<Shader>,
-    pub(super) reservoirs: HashGrid,
+    pub(super) reservoir_pools: HashGrid,
     pub(super) reservoir_updates: HashGrid,
 }
 
@@ -79,7 +81,7 @@ impl Integrator {
             binding!(storage_buffer, uint, indices, true, false),
             binding!(storage_buffer, Material, materials, true, false),
             binding!(storage_buffer, Instance, instances, true, false),
-            binding!(storage_buffer, uint64_t, reservoir_hashes, true, true),
+            binding!(storage_buffer, uint64_t, reservoir_pool_hashes, true, true),
             binding!(
                 storage_buffer,
                 uint64_t,
@@ -87,7 +89,7 @@ impl Integrator {
                 true,
                 true
             ),
-            binding!(storage_buffer, Reservoir, reservoirs, true, true),
+            binding!(storage_buffer, ReservoirPool, reservoir_pools, true, true),
             binding!(
                 storage_buffer,
                 ReservoirUpdate,
@@ -124,7 +126,7 @@ impl Integrator {
         )?;
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
-            binding!(storage_buffer, uint64_t, reservoir_hashes, true, true),
+            binding!(storage_buffer, uint64_t, reservoir_pool_hashes, true, true),
             binding!(
                 storage_buffer,
                 uint64_t,
@@ -132,7 +134,7 @@ impl Integrator {
                 true,
                 true
             ),
-            binding!(storage_buffer, Reservoir, reservoirs, true, true),
+            binding!(storage_buffer, ReservoirPool, reservoir_pools, true, true),
             binding!(
                 storage_buffer,
                 ReservoirUpdate,
@@ -152,13 +154,21 @@ impl Integrator {
         )?;
         let hash_grid_layout = |bucket_size, capacity| HashGridLayout {
             padding: 0,
-            scene_scale: 10.0,
+            scene_scale: 20.0,
             bucket_size,
             capacity,
         };
         Ok(Self {
-            reservoirs: HashGrid::new(context, 60, hash_grid_layout(16, 0xffff))?,
-            reservoir_updates: HashGrid::new(context, 836, hash_grid_layout(1, 1024))?,
+            reservoir_pools: HashGrid::new(
+                context,
+                mem::size_of::<restir::ReservoirPool>(),
+                hash_grid_layout(64, 0xfffff),
+            )?,
+            reservoir_updates: HashGrid::new(
+                context,
+                mem::size_of::<restir::ReservoirUpdate>(),
+                hash_grid_layout(1, 0xffff),
+            )?,
             update_reservoirs,
             integrate,
         })
@@ -179,9 +189,9 @@ impl Integrator {
             .bind_buffer("indices", &scene.indices)
             .bind_buffer("materials", &scene.materials)
             .bind_buffer("instances", &scene.instances)
-            .bind_buffer("reservoir_hashes", &self.reservoirs.hashes)
+            .bind_buffer("reservoir_pool_hashes", &self.reservoir_pools.hashes)
             .bind_buffer("reservoir_update_hashes", &self.reservoir_updates.hashes)
-            .bind_buffer("reservoirs", &self.reservoirs.values)
+            .bind_buffer("reservoir_pools", &self.reservoir_pools.values)
             .bind_buffer("reservoir_updates", &self.reservoir_updates.values)
             .bind_sampled_images("textures", &scene.texture_sampler, &scene.textures)
             .bind_acceleration_structure("acceleration_structure", &scene.tlas)
@@ -191,11 +201,11 @@ impl Integrator {
         context
             .bind_shader(&self.update_reservoirs)
             .bind_buffer("constants", constants)
-            .bind_buffer("reservoir_hashes", &self.reservoirs.hashes)
+            .bind_buffer("reservoir_pool_hashes", &self.reservoir_pools.hashes)
             .bind_buffer("reservoir_update_hashes", &self.reservoir_updates.hashes)
-            .bind_buffer("reservoirs", &self.reservoirs.values)
+            .bind_buffer("reservoir_pools", &self.reservoir_pools.values)
             .bind_buffer("reservoir_updates", &self.reservoir_updates.values)
-            .dispatch(1024, 1)?;
+            .dispatch(self.reservoir_updates.layout.capacity, 1)?;
         Ok(())
     }
 }

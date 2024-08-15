@@ -1,6 +1,6 @@
-#define HASH_GRID_BUFFER reservoir_hashes
-#define HASH_GRID_INSERT insert_reservoir
-#define HASH_GRID_FIND find_reservoir
+#define HASH_GRID_BUFFER reservoir_pool_hashes
+#define HASH_GRID_INSERT insert_reservoir_pool
+#define HASH_GRID_FIND find_reservoir_pool
 #include "hash_grid"
 
 #undef HASH_GRID_BUFFER
@@ -159,6 +159,17 @@ vec2 pixel_ndc(uvec2 pixel_index, inout Generator generator) {
     return ((vec2(pixel_index) + offset) / vec2(constants.screen_size)) * 2.0 - 1.0;
 }
 
+float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
+    return 0.5 * log2(max(
+        length_squared(texcoord_ddx * constants.screen_size),
+        length_squared(texcoord_ddy * constants.screen_size)
+    ));
+}
+
+vec3 normal_bias(vec3 position, vec3 normal) {
+    return position + normal * 0.00001;
+}
+
 struct ResamplePath {
     Path path;
     float pdf;
@@ -171,17 +182,10 @@ struct TracePathConfig {
     bool resample_path;
 };
 
-HashGrid create_hash_grid(uint bucket_size, uint capacity) {
-    HashGrid hash_grid;
-    hash_grid.scene_scale = 10.0;
-    hash_grid.bucket_size = bucket_size;
-    hash_grid.capacity = capacity;
-    return hash_grid;
-}
-
 vec3 trace_path(
     Ray ray,
     inout Generator generator,
+    Generator path_generator,
     vec2 ndc,
     TracePathConfig config,
     out ResamplePath resample_path
@@ -202,19 +206,15 @@ vec3 trace_path(
         RayHit hit;
 
         if (!trace_ray(ray, bounce, ndc, hit)) {
-            return accumulated + attenuation;
+            // return accumulated + attenuation;
+            return vec3(0.0);
         }
 
         Instance instance = instances[hit.instance];
         Material material = materials[instance.material];
 
-        // Calculate the mip level using the standard GLSL method.
         if (bounce == 0) {
-            hit.texcoord_ddx *= vec2(constants.screen_size);
-            hit.texcoord_ddy *= vec2(constants.screen_size);
-            float max_length_squared =
-                max(dot(hit.texcoord_ddx, hit.texcoord_ddx), dot(hit.texcoord_ddy, hit.texcoord_ddy));
-            mip_level = 0.5 * log2(max_length_squared);
+            mip_level = calculate_mip_level(hit.texcoord_ddx, hit.texcoord_ddy);
         }
 
         vec3 tangent_space_normal = octahedron_decode(
@@ -226,19 +226,17 @@ vec3 trace_path(
         surface_basis.tangent = gram_schmidt(surface_basis.normal, hit.tangent_space.tangent);
         surface_basis.bitangent = normalize(cross(surface_basis.normal, surface_basis.tangent));
 
-        vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level);
-        albedo *= vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
+        vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level)
+            * vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
 
         vec2 metallic_roughness = textureLod(textures[material.specular_texture], hit.texcoord, mip_level).rg;
-        vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, mip_level).rgb;
-        emissive *= vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
+        vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, mip_level).rgb
+            * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
 
         SurfaceProperties surface;
         surface.albedo = albedo.rgb;
-
         surface.metallic = metallic_roughness.r * material.metallic;
-        surface.roughness = metallic_roughness.g * material.roughness;
-        surface.roughness *= surface.roughness;
+        surface.roughness = pow2(metallic_roughness.g * material.roughness);
 
         // Heuristic for mip level.
         mip_level += surface.roughness;
@@ -252,39 +250,45 @@ vec3 trace_path(
         vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
 
         float pdf = 0.0;
+        vec3 radiance = vec3(0.0);
         vec3 local_scatter, local_half_vector;
-        if (config.resample_path && surface.roughness >= 0.25) {
+        if (config.resample_path && bounce != 0) {
             config.resample_path = false;
-            vec3 offset = random_vec3(generator) * 2.0 - 1.0;
             uint64_t key = hash_grid_key(hash_grid_cell(
-                hit.world_position, constants.camera_position.xyz, offset, constants.reservoir_hash_grid
+                normal_bias(hit.world_position, surface_basis.normal),
+                constants.camera_position.xyz,
+                vec3(0.0),//random_vec3(generator) * 2.0 - 1.0,
+                constants.reservoir_hash_grid
             ));
-            uint reservoir_index;
-            if (find_reservoir(constants.reservoir_hash_grid, key, reservoir_index)) {
-                Reservoir reservoir = reservoirs[reservoir_index];
-                // Reconnect with sample the sample in the reservoir if it is valid.
-                if (reservoir_is_valid(reservoir)) {
-                    generator = reservoir.path.generator;
-                    local_scatter = transform_from_basis(
-                        surface_basis,
-                        normalize(bounce_surface_position(reservoir.path.destination) - hit.world_position)
-                    );
+            uint reservoir_pool_index;
+            if (find_reservoir_pool(constants.reservoir_hash_grid, key, reservoir_pool_index)) {
+                Reservoir reservoir =
+                    determine_reservoir_from_pool(reservoir_pools[reservoir_pool_index], generator);
+                // Reconnect with the sample in the reservoir if it's valid.
+                bool can_reconnect = reservoir_is_valid(reservoir)
+                    && can_reconnect_to_path(hit.world_position, surface_basis.normal, reservoir.path);
+                if (can_reconnect) {
+                    path_generator = reservoir.path.generator;
+                    local_scatter = transform_from_basis(surface_basis, normalize(
+                        bounce_surface_position(reservoir.path.destination) - hit.world_position
+                    ));
                     local_half_vector = normalize(local_scatter + local_view);
-                    pdf = 1.0 / reservoir.weight;
+                    float jacobian = path_jacobian(hit.world_position, reservoir.path);
+                    pdf = 1.0 / reservoir.weight * clamp(jacobian, 0.0, 1000.0);
                 }
             }
         }
 
         bool sampled_diffuse = false;
-        Generator before_sample_generator = generator;
+        Generator before_sample_generator = path_generator;
 
         if (pdf == 0.0) {
-            if (random_float(generator) > surface.metallic) {
-                local_scatter = cosine_hemisphere_sample(generator);
+            if (random_float(path_generator) > surface.metallic) {
+                local_scatter = cosine_hemisphere_sample(path_generator);
                 local_half_vector = normalize(local_scatter + local_view);
                 sampled_diffuse = true;
             } else {
-                local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+                local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, path_generator);
             }
             pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
                 + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
@@ -312,7 +316,7 @@ vec3 trace_path(
         }
 
         ray.direction = transform_to_basis(surface_basis, local_scatter);
-        ray.origin = hit.world_position + 0.0001 * surface_basis.normal;
+        ray.origin = normal_bias(hit.world_position, surface_basis.normal);
 
         ScatterProperties scatter;
         scatter.direction = ray.direction;
@@ -336,15 +340,20 @@ vec3 trace_path(
         // appear to be 0.0, thus it is likely to be numeric issues and
         // not algebraic).
         vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
-        attenuation *= attenuation_factor;
 
+        attenuation *= attenuation_factor;
         if (resample_path.is_found) {
             resample_attenuation *= attenuation_factor;
+        }
+
+        if (length(radiance) > 0.0) {
+            return radiance * attenuation + accumulated;
         }
 
         previous_normal = surface_basis.normal;
         previous_was_diffuse = surface.roughness > 0.25;
     }
+
     return accumulated;
 }
 
@@ -355,18 +364,22 @@ void main() {
     Generator generator =
         init_generator_from_pixel(pixel_index, constants.screen_size, constants.frame_index);
 
-    bool resample = constants.frame_index % 2 == 1;
-    TracePathConfig trace_path_config = TracePathConfig(constants.bounce_count, !resample, resample);
-
     vec3 accumulated = vec3(0.0);
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
+        bool resample = sample_index % 2 == 1;
+        TracePathConfig trace_path_config =
+            TracePathConfig(constants.bounce_count, !resample, resample);
+        Generator path_generator =
+            init_generator_from_pixel(pixel_index, constants.screen_size, generator.state);
+
         vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
 
         ResamplePath resample_path;
-        accumulated += trace_path(ray, generator, ndc, trace_path_config, resample_path);
+        vec3 radiance = trace_path(ray, generator, path_generator, ndc, trace_path_config, resample_path);
+        accumulated += radiance;
 
-        if (resample_path.is_found && sample_index == 0) {
+        if (resample_path.is_found && path_target_function(resample_path.path) > 0.0) {
             uint64_t key = hash_grid_key(hash_grid_cell(
                 bounce_surface_position(resample_path.path.origin),
                 constants.camera_position.xyz,
@@ -383,7 +396,7 @@ void main() {
         }
     }
 
-    accumulated /= float(constants.sample_count);
+    accumulated /= constants.sample_count;
 
     if (constants.accumulated_frame_count != 0) {
         vec3 previous = imageLoad(target, ivec2(pixel_index)).xyz;

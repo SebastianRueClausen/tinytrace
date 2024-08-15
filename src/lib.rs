@@ -121,7 +121,7 @@ impl Renderer {
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
-            reservoir_hash_grid: self.integrator.reservoirs.layout,
+            reservoir_hash_grid: self.integrator.reservoir_pools.layout,
             reservoir_update_hash_grid: self.integrator.reservoir_updates.layout,
             proj_view,
             view,
@@ -140,6 +140,18 @@ impl Renderer {
             &self.scene,
             &self.render_target,
         )?;
+
+        /*
+        if self.context.frame_index() % 1000 == 0 && self.context.frame_index() != 0 {
+            let download = self
+                .context
+                .download(&[self.integrator.reservoir_pools.values.clone()], &[])
+                .unwrap();
+            let reservoir_pools: &[ReservoirPool] =
+                bytemuck::cast_slice(&download.buffers[&self.integrator.reservoir_pools.values]);
+            println!("{:#?}", &reservoir_pools[32]);
+        }
+        */
 
         Ok(())
     }
@@ -222,8 +234,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bounce_count: 4,
-            sample_count: 4,
+            bounce_count: 6,
+            sample_count: 2,
         }
     }
 }

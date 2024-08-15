@@ -38,6 +38,10 @@ float random_float(inout Generator generator) {
     return uint_to_unit_float(xor_shift(generator.state));
 }
 
+uint random_uint(inout Generator generator, uint end) {
+    return xor_shift(generator.state) % end;
+}
+
 vec3 random_vec3(inout Generator generator) {
     return vec3(random_float(generator), random_float(generator), random_float(generator));
 }

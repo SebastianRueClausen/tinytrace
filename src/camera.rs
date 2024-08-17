@@ -1,6 +1,6 @@
 use glam::{Mat4, Vec2, Vec3};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Camera {
     pub position: Vec3,
     pub forward: Vec3,
@@ -53,6 +53,15 @@ impl Camera {
         )
         .normalize();
     }
+
+    pub fn different_from(&self, other: &Camera) -> bool {
+        const DIFFERENCE_THRESHOLD: f32 = 1e-4;
+        Vec3::max_element((self.position - other.position).abs()) > DIFFERENCE_THRESHOLD
+            || Vec3::max_element((self.forward - other.forward).abs()) > DIFFERENCE_THRESHOLD
+            || (self.yaw - other.yaw).abs() > DIFFERENCE_THRESHOLD
+            || (self.pitch - other.pitch).abs() > DIFFERENCE_THRESHOLD
+            || (self.fov - other.fov).abs() > DIFFERENCE_THRESHOLD
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -60,12 +69,4 @@ pub struct CameraMove {
     pub translation: Vec3,
     pub yaw: f32,
     pub pitch: f32,
-}
-
-impl CameraMove {
-    pub fn moves(&self) -> bool {
-        self.translation.abs().max_element() > 1e-4
-            || self.yaw.abs() > 1e-4
-            || self.pitch.abs() > 1e-4
-    }
 }

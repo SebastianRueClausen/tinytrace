@@ -6,7 +6,7 @@ use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
 use tinytrace::error::{ErrorKind, Result};
-use tinytrace::{backend, Renderer};
+use tinytrace::{asset, backend, Renderer};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -15,36 +15,32 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 struct App {
-    state: Option<(Window, Renderer)>,
-    scene: tinytrace::asset::Scene,
-    gui: Option<Gui>,
-    inputs: Inputs,
-    last_update: Instant,
+    render_state: Option<RenderState>,
+    scene: asset::Scene,
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Poll);
         let window = event_loop
             .create_window(Window::default_attributes())
             .unwrap();
-
-        let extent = vk::Extent2D {
-            width: window.inner_size().width,
-            height: window.inner_size().height,
-        };
-
-        let handles = (
+        let extent = vk::Extent2D::default()
+            .width(window.inner_size().width)
+            .height(window.inner_size().height);
+        let window_handles = Some((
             window.window_handle().unwrap().as_raw(),
             window.display_handle().unwrap().as_raw(),
-        );
-
-        let mut renderer =
-            Renderer::new(Some(handles), extent).unwrap_or_else(|error| panic!("{error:#?}"));
+        ));
+        let mut renderer = Renderer::new(window_handles, extent).unwrap();
         renderer.set_scene(&self.scene).unwrap();
-
-        self.gui = Gui::new(&mut renderer.context, event_loop).unwrap().into();
-        self.state = (window, renderer).into();
-        event_loop.set_control_flow(ControlFlow::Poll);
+        self.render_state = Some(RenderState {
+            gui: Gui::new(&mut renderer.context, event_loop).unwrap().into(),
+            camera_controller: CameraController::default(),
+            last_update: Instant::now(),
+            window,
+            renderer,
+        });
     }
 
     fn window_event(
@@ -53,107 +49,135 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some((window, _)) = &mut self.state else {
+        let Some(render_state) = &mut self.render_state else {
             return;
         };
-        if window.id() != window_id {
+        if render_state.window.id() != window_id {
             return;
         }
-        if let Some(gui) = &mut self.gui {
-            if gui
-                .egui_winit_state
-                .on_window_event(&window, &event)
-                .consumed
-            {
-                return;
-            }
+        if let WindowEvent::CloseRequested = event {
+            event_loop.exit();
+        } else {
+            render_state.handle_window_event(&event);
+        }
+    }
+
+    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+        if let Some(render_state) = &mut self.render_state {
+            render_state.render();
+        }
+    }
+}
+
+struct RenderState {
+    window: Window,
+    renderer: Renderer,
+    last_update: Instant,
+    gui: Gui,
+    camera_controller: CameraController,
+}
+
+impl RenderState {
+    fn handle_window_event(&mut self, event: &WindowEvent) {
+        let response = self
+            .gui
+            .egui_winit_state
+            .on_window_event(&self.window, &event);
+        if response.consumed {
+            return;
         }
         match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     match event.state {
-                        ElementState::Pressed => self.inputs.key_pressed(key),
-                        ElementState::Released => self.inputs.key_released(key),
+                        ElementState::Pressed => self.camera_controller.key_pressed(key),
+                        ElementState::Released => self.camera_controller.key_released(key),
                     }
                 };
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                self.inputs.modifier_change(modifiers.state());
+                self.camera_controller.modifier_change(modifiers.state());
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.inputs.mouse_moved(Vec2 {
-                    x: position.x as f32,
-                    y: position.y as f32,
-                });
+                self.camera_controller
+                    .mouse_moved(Vec2::new(position.x as f32, position.y as f32));
             }
             _ => (),
         }
     }
 
-    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
-        let Some((window, renderer)) = &mut self.state else {
-            return;
-        };
-
+    fn render(&mut self) {
+        self.window.request_redraw();
         let dt = self.last_update.elapsed();
         self.last_update = Instant::now();
-
-        let camera_move = self.inputs.camera_move(&renderer.camera, dt);
-        if camera_move.moves() {
-            renderer.reset_accumulation();
+        let previous_camera = self.renderer.camera;
+        let egui_output = self.run_gui();
+        let camera_move = self
+            .camera_controller
+            .camera_move(&self.renderer.camera, dt);
+        self.renderer.camera.move_by(camera_move);
+        if previous_camera.different_from(&self.renderer.camera) {
+            self.renderer.reset_accumulation();
         }
-
-        renderer.camera.move_by(camera_move);
-        renderer.render_to_target().unwrap();
-        let swapchain_image = match renderer.prepare_to_present() {
+        self.renderer.render_to_target().unwrap();
+        let swapchain_image = match self.renderer.prepare_to_present() {
             Ok(swapchain_image) => swapchain_image,
             Err(error) => {
                 self.handle_error(&error);
                 return;
             }
         };
-
-        if let Some(gui) = &mut self.gui {
-            gui.render(
-                &mut renderer.context,
-                &swapchain_image,
-                &window,
-                &mut self.inputs,
-            )
-            .unwrap();
-        }
-
-        if let Err(error) = renderer.present() {
+        self.render_gui(&swapchain_image, egui_output).unwrap();
+        if let Err(error) = self.renderer.present() {
             self.handle_error(&error);
         }
-
-        let Some((window, _)) = &mut self.state else {
-            return;
-        };
-        window.request_redraw();
     }
-}
 
-impl App {
     fn handle_error(&mut self, error: &tinytrace::Error) {
-        let Some((window, renderer)) = &mut self.state else {
-            return;
-        };
         if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
-            let window_size = window.inner_size();
-            renderer
+            self.renderer
                 .resize(vk::Extent2D {
-                    width: window_size.width,
-                    height: window_size.height,
+                    width: self.window.inner_size().width,
+                    height: self.window.inner_size().height,
                 })
                 .unwrap();
         } else {
             panic!("unexpected error: {error}")
         }
-        window.request_redraw();
+    }
+
+    fn run_gui(&mut self) -> egui::FullOutput {
+        let raw_input = self.gui.egui_winit_state.take_egui_input(&self.window);
+        self.gui.egui_context.run(raw_input, |egui_context| {
+            egui::Window::new("Render Control")
+                .resizable(true)
+                .show(egui_context, |ui| {
+                    ui.collapsing("Camera", |ui| {
+                        camera_gui(&mut self.camera_controller, &mut self.renderer.camera, ui);
+                    });
+                });
+        })
+    }
+
+    fn render_gui(
+        &mut self,
+        render_target: &backend::Handle<backend::Image>,
+        egui_output: egui::FullOutput,
+    ) -> Result<()> {
+        let pixels_per_point = self.gui.egui_context.pixels_per_point();
+        self.gui.renderer.render(
+            &mut self.renderer.context,
+            render_target,
+            &GuiRenderRequest {
+                textures_delta: egui_output.textures_delta,
+                primitives: self
+                    .gui
+                    .egui_context
+                    .tessellate(egui_output.shapes, pixels_per_point),
+                pixels_per_point,
+            },
+        )?;
+        Ok(())
     }
 }
 
@@ -180,52 +204,42 @@ impl Gui {
             egui_context,
         })
     }
-
-    fn render(
-        &mut self,
-        context: &mut backend::Context,
-        render_target: &backend::Handle<backend::Image>,
-        window: &winit::window::Window,
-        _input: &mut Inputs,
-    ) -> Result<()> {
-        let raw_input = self.egui_winit_state.take_egui_input(window);
-        let output = self.egui_context.run(raw_input, |egui_context| {
-            gui_window(egui_context);
-        });
-        let pixels_per_point = self.egui_context.pixels_per_point();
-        self.renderer.render(
-            context,
-            render_target,
-            &GuiRenderRequest {
-                textures_delta: output.textures_delta,
-                primitives: self
-                    .egui_context
-                    .tessellate(output.shapes, pixels_per_point),
-                pixels_per_point,
-            },
-        )?;
-        Ok(())
-    }
 }
 
-fn gui_window(egui_context: &egui::Context) {
-    egui::Window::new("Render Control")
-        .resizable(true)
-        .show(egui_context, |ui| {
-            ui.label("hello world");
-        });
+fn camera_gui(camera_controller: &mut CameraController, camera: &mut Camera, ui: &mut egui::Ui) {
+    egui::Grid::new("transform").show(ui, |ui| {
+        ui.label("Acceleration");
+        ui.add(egui::DragValue::new(&mut camera_controller.acceleration).speed(0.1));
+        ui.end_row();
+
+        ui.label("Sensitivity");
+        ui.add(egui::DragValue::new(&mut camera_controller.sensitivity).speed(0.1));
+        ui.end_row();
+
+        ui.label("Position");
+        ui.add(egui::DragValue::new(&mut camera.position.x));
+        ui.add(egui::DragValue::new(&mut camera.position.y));
+        ui.add(egui::DragValue::new(&mut camera.position.z));
+        ui.end_row();
+
+        ui.label("Field of view");
+        ui.drag_angle(&mut camera.fov);
+        ui.end_row();
+    });
 }
 
-#[derive(Default)]
-struct Inputs {
+struct CameraController {
+    velocity: Vec3,
+    acceleration: f32,
+    sensitivity: f32,
+    drag: f32,
     keys_pressed: BitSet,
     modifier_state: ModifiersState,
     mouse_position: Option<Vec2>,
     mouse_delta: Option<Vec2>,
-    camera_velocity: Vec3,
 }
 
-impl Inputs {
+impl CameraController {
     fn mouse_moved(&mut self, to: Vec2) {
         let position = self.mouse_position.unwrap_or(to);
         let delta = self.mouse_delta.unwrap_or_default();
@@ -257,47 +271,55 @@ impl Inputs {
         let mut camera_move = CameraMove::default();
         let dt = dt.as_secs_f32();
 
-        let acceleration = 1.0;
-        let drag = 8.0;
-        let sensitivity = 0.05;
-
-        self.camera_velocity -= self.camera_velocity * drag * dt.min(1.0);
+        self.velocity -= self.velocity * self.drag * dt.min(1.0);
 
         if self.is_key_pressed(KeyCode::KeyW) {
-            self.camera_velocity -= camera.forward * acceleration * dt;
+            self.velocity -= camera.forward * self.acceleration * dt;
         }
         if self.is_key_pressed(KeyCode::KeyS) {
-            self.camera_velocity += camera.forward * acceleration * dt;
+            self.velocity += camera.forward * self.acceleration * dt;
         }
 
         let right = camera.right();
 
         if self.is_key_pressed(KeyCode::KeyA) {
-            self.camera_velocity -= right * acceleration * dt;
+            self.velocity -= right * self.acceleration * dt;
         }
         if self.is_key_pressed(KeyCode::KeyD) {
-            self.camera_velocity += right * acceleration * dt;
+            self.velocity += right * self.acceleration * dt;
         }
 
-        camera_move.translation = self.camera_velocity;
+        camera_move.translation = self.velocity;
 
         let mouse_delta = self.mouse_delta();
         if self.modifier_state.shift_key() {
-            camera_move.yaw += sensitivity * mouse_delta.x;
-            camera_move.pitch += sensitivity * mouse_delta.y;
+            camera_move.yaw += self.sensitivity * mouse_delta.x;
+            camera_move.pitch += self.sensitivity * mouse_delta.y;
         }
 
         camera_move
     }
 }
 
+impl Default for CameraController {
+    fn default() -> Self {
+        Self {
+            keys_pressed: BitSet::default(),
+            modifier_state: ModifiersState::default(),
+            mouse_position: None,
+            mouse_delta: None,
+            velocity: Vec3::default(),
+            acceleration: 1.0,
+            sensitivity: 0.05,
+            drag: 8.0,
+        }
+    }
+}
+
 fn main() {
     let scene = tinytrace::asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
     let mut app = App {
-        last_update: Instant::now(),
-        inputs: Inputs::default(),
-        gui: None,
-        state: None,
+        render_state: None,
         scene,
     };
     let event_loop = EventLoop::new().unwrap();

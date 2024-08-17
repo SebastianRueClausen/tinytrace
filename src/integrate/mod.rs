@@ -112,6 +112,7 @@ impl Integrator {
             &ShaderRequest {
                 block_size: vk::Extent2D::default().width(32).height(32),
                 source: include_str!("integrate.glsl"),
+                push_constant_size: None,
                 includes: &[
                     "scene",
                     "brdf",
@@ -149,6 +150,7 @@ impl Integrator {
                 block_size: vk::Extent2D::default().width(256).height(1),
                 source: include_str!("update_reservoirs.glsl"),
                 includes: &["random", "restir", "math", "constants"],
+                push_constant_size: None,
                 bindings,
             },
         )?;

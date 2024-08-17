@@ -209,6 +209,8 @@ pub(super) struct BoundShader {
     bound: HashMap<&'static str, BoundResource>,
     /// `true` if this shader wast just dispatched.
     has_been_dispatched: bool,
+    /// `true` if push constants has been pushed.
+    constants_has_been_pushed: bool,
 }
 
 impl BoundShader {
@@ -216,6 +218,7 @@ impl BoundShader {
         Self {
             bound: HashMap::default(),
             has_been_dispatched: false,
+            constants_has_been_pushed: false,
             shader,
         }
     }
@@ -364,6 +367,7 @@ pub struct Shader {
     pub layout: vk::PipelineLayout,
     pub descriptor_layout: vk::DescriptorSetLayout,
     bindings: HashMap<&'static str, ShaderBinding>,
+    push_constant_size: Option<u32>,
     pub block_size: vk::Extent2D,
 }
 
@@ -385,9 +389,17 @@ impl Shader {
 fn create_pipeline_layout(
     device: &Device,
     descriptor_layout: vk::DescriptorSetLayout,
+    push_constant_size: Option<u32>,
 ) -> Result<vk::PipelineLayout, Error> {
-    let layout_info =
+    let mut layout_info =
         vk::PipelineLayoutCreateInfo::default().set_layouts(slice::from_ref(&descriptor_layout));
+    let mut push_constant_range = vk::PushConstantRange::default();
+    if let Some(size) = push_constant_size {
+        push_constant_range = push_constant_range
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .size(size);
+        layout_info = layout_info.push_constant_ranges(slice::from_ref(&push_constant_range));
+    }
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
     Ok(pipeline_layout)
 }
@@ -397,6 +409,7 @@ pub struct ShaderRequest<'a> {
     pub block_size: vk::Extent2D,
     pub bindings: &'a [Binding],
     pub includes: &'a [&'a str],
+    pub push_constant_size: Option<u32>,
 }
 
 impl Context {
@@ -438,7 +451,8 @@ impl Context {
     ) -> Result<Handle<Shader>, Error> {
         let module = self.create_shader_module(request)?;
         let descriptor_layout = create_descriptor_layout(&self.device, request.bindings)?;
-        let pipeline_layout = create_pipeline_layout(&self.device, descriptor_layout)?;
+        let pipeline_layout =
+            create_pipeline_layout(&self.device, descriptor_layout, request.push_constant_size)?;
         let stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
@@ -457,6 +471,7 @@ impl Context {
             *pipelines.map_err(|(_, err)| err)?.first().unwrap()
         };
         let pipeline = Shader {
+            push_constant_size: request.push_constant_size,
             bindings: request
                 .bindings
                 .iter()
@@ -517,6 +532,24 @@ impl Context {
         let error = || panic!("no binding with name {name}");
         let shader = self.shader(&self.bound_shader().shader);
         shader.bindings.get(name).unwrap_or_else(error)
+    }
+
+    pub fn push_constant(&mut self, constant: &impl bytemuck::NoUninit) -> &mut Self {
+        let shader = self.shader(&self.bound_shader().shader);
+        let bytes = bytemuck::bytes_of(constant);
+        assert_eq!(
+            shader.push_constant_size,
+            Some(bytes.len() as u32),
+            "push constant doesn't match shader"
+        );
+        unsafe {
+            let stage = vk::ShaderStageFlags::COMPUTE;
+            let buffer = self.command_buffer().buffer;
+            self.device
+                .cmd_push_constants(buffer, shader.layout, stage, 0, bytes)
+        }
+        self.bound_shader_mut().constants_has_been_pushed = true;
+        self
     }
 
     pub fn bind_images(
@@ -657,6 +690,10 @@ impl Context {
         let shader = self.shader(&bound_shader.shader);
         let offset = self.command_buffer().descriptor_buffer.bound_range.start as vk::DeviceSize;
         self.set_descriptor(offset, shader.layout);
+
+        if shader.push_constant_size.is_some() && !bound_shader.constants_has_been_pushed {
+            panic!("push constant is missing");
+        }
 
         let width = width.div_ceil(shader.block_size.width);
         let height = height.div_ceil(shader.block_size.height);

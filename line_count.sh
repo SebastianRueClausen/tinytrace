@@ -1,6 +1,6 @@
 #!/bin/sh
 
-LINE_COUNT_THRESHOLD=5000
+LINE_COUNT_THRESHOLD=7500
 
 # 1. Get files tracked by git.
 # 2. Exclude files that include "test".

@@ -5,8 +5,9 @@ use bit_set::BitSet;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
-use tinytrace::error::ErrorKind;
+use tinytrace::error::{ErrorKind, Result};
 use tinytrace::{backend, Renderer};
+use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -16,6 +17,7 @@ use winit::window::{Window, WindowId};
 struct App {
     state: Option<(Window, Renderer)>,
     scene: tinytrace::asset::Scene,
+    gui: Option<Gui>,
     inputs: Inputs,
     last_update: Instant,
 }
@@ -40,7 +42,8 @@ impl ApplicationHandler for App {
             Renderer::new(Some(handles), extent).unwrap_or_else(|error| panic!("{error:#?}"));
         renderer.set_scene(&self.scene).unwrap();
 
-        self.state = Some((window, renderer));
+        self.gui = Gui::new(&mut renderer.context, event_loop).unwrap().into();
+        self.state = (window, renderer).into();
         event_loop.set_control_flow(ControlFlow::Poll);
     }
 
@@ -55,6 +58,15 @@ impl ApplicationHandler for App {
         };
         if window.id() != window_id {
             return;
+        }
+        if let Some(gui) = &mut self.gui {
+            if gui
+                .egui_winit_state
+                .on_window_event(&window, &event)
+                .consumed
+            {
+                return;
+            }
         }
         match event {
             WindowEvent::CloseRequested => {
@@ -93,21 +105,115 @@ impl ApplicationHandler for App {
         if camera_move.moves() {
             renderer.reset_accumulation();
         }
-        renderer.camera.move_by(camera_move);
 
-        if let Err(error) = renderer.render_to_surface() {
-            if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
-                let window_size = window.inner_size();
-                renderer
-                    .resize(vk::Extent2D {
-                        width: window_size.width,
-                        height: window_size.height,
-                    })
-                    .unwrap();
+        renderer.camera.move_by(camera_move);
+        renderer.render_to_target().unwrap();
+        let swapchain_image = match renderer.prepare_to_present() {
+            Ok(swapchain_image) => swapchain_image,
+            Err(error) => {
+                self.handle_error(&error);
+                return;
             }
+        };
+
+        if let Some(gui) = &mut self.gui {
+            gui.render(
+                &mut renderer.context,
+                &swapchain_image,
+                &window,
+                &mut self.inputs,
+            )
+            .unwrap();
+        }
+
+        if let Err(error) = renderer.present() {
+            self.handle_error(&error);
+        }
+
+        let Some((window, _)) = &mut self.state else {
+            return;
+        };
+        window.request_redraw();
+    }
+}
+
+impl App {
+    fn handle_error(&mut self, error: &tinytrace::Error) {
+        let Some((window, renderer)) = &mut self.state else {
+            return;
+        };
+        if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
+            let window_size = window.inner_size();
+            renderer
+                .resize(vk::Extent2D {
+                    width: window_size.width,
+                    height: window_size.height,
+                })
+                .unwrap();
+        } else {
+            panic!("unexpected error: {error}")
         }
         window.request_redraw();
     }
+}
+
+struct Gui {
+    egui_context: egui::Context,
+    egui_winit_state: egui_winit::State,
+    renderer: GuiRenderer,
+}
+
+impl Gui {
+    fn new(context: &mut backend::Context, event_loop: &ActiveEventLoop) -> Result<Self> {
+        let egui_context = egui::Context::default();
+        let viewport_id = egui_context.viewport_id();
+        Ok(Self {
+            renderer: GuiRenderer::new(context, context.surface_format())?,
+            egui_winit_state: egui_winit::State::new(
+                egui_context.clone(),
+                viewport_id,
+                event_loop,
+                None,
+                None,
+                None,
+            ),
+            egui_context,
+        })
+    }
+
+    fn render(
+        &mut self,
+        context: &mut backend::Context,
+        render_target: &backend::Handle<backend::Image>,
+        window: &winit::window::Window,
+        _input: &mut Inputs,
+    ) -> Result<()> {
+        let raw_input = self.egui_winit_state.take_egui_input(window);
+        let output = self.egui_context.run(raw_input, |egui_context| {
+            gui_window(egui_context);
+        });
+        let pixels_per_point = self.egui_context.pixels_per_point();
+        self.renderer.render(
+            context,
+            render_target,
+            &GuiRenderRequest {
+                textures_delta: output.textures_delta,
+                primitives: self
+                    .egui_context
+                    .tessellate(output.shapes, pixels_per_point),
+                pixels_per_point,
+            },
+        )?;
+        Ok(())
+    }
+}
+
+fn gui_window(egui_context: &egui::Context) {
+    egui::Window::new("Render Control")
+        .resizable(true)
+        .show(egui_context, |ui| {
+            ui.label("hello world");
+        });
 }
 
 #[derive(Default)]
@@ -187,14 +293,13 @@ impl Inputs {
 
 fn main() {
     let scene = tinytrace::asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
-
     let mut app = App {
         last_update: Instant::now(),
         inputs: Inputs::default(),
+        gui: None,
         state: None,
         scene,
     };
-
     let event_loop = EventLoop::new().unwrap();
     event_loop.run_app(&mut app).unwrap();
 }

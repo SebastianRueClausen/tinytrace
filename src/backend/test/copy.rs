@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ash::vk;
 
 use super::create_test_buffer;
@@ -29,14 +31,14 @@ fn transfer() {
     let download = context
         .write_buffers(&[BufferWrite {
             buffer: buffer.clone(),
-            data: &buffer_data,
+            data: Cow::Borrowed(&buffer_data),
         }])
         .unwrap()
         .write_images(&[ImageWrite {
             image: image.clone(),
             offset: vk::Offset3D::default(),
             extent,
-            mips: &[image_data.clone()],
+            mips: Cow::Borrowed(&[image_data.clone()]),
         }])
         .unwrap()
         .download(&[buffer.clone()], &[image.clone()])
@@ -70,7 +72,7 @@ fn transfer_image_mips() {
             image: image.clone(),
             offset: vk::Offset3D::default(),
             extent,
-            mips: &mips.clone(),
+            mips: (&mips.clone()).into(),
         }])
         .unwrap()
         .download(&[], &[image.clone()])
@@ -119,14 +121,14 @@ fn odd_sized_images() {
             image: a.clone(),
             offset: vk::Offset3D::default(),
             extent: a_extent,
-            mips: &[a_bytes.clone()],
+            mips: Cow::Borrowed(&[a_bytes.clone()]),
         }])
         .unwrap()
         .write_images(&[ImageWrite {
             image: b.clone(),
             offset: vk::Offset3D::default(),
             extent: b_extent,
-            mips: &[b_bytes.clone()],
+            mips: Cow::Borrowed(&[b_bytes.clone()]),
         }])
         .unwrap()
         .download(&[], &[a.clone(), b.clone()])
@@ -148,11 +150,11 @@ fn odd_sized_buffers() {
         .write_buffers(&[
             BufferWrite {
                 buffer: a.clone(),
-                data: &a_data,
+                data: Cow::Borrowed(&a_data),
             },
             BufferWrite {
                 buffer: b.clone(),
-                data: &b_data,
+                data: Cow::Borrowed(&b_data),
             },
         ])
         .unwrap();
@@ -185,15 +187,29 @@ fn large_buffers() {
         .write_buffers(&[
             BufferWrite {
                 buffer: buffers[0].clone(),
-                data: &data_1,
+                data: Cow::Borrowed(&data_1),
             },
             BufferWrite {
                 buffer: buffers[1].clone(),
-                data: &data_2,
+                data: Cow::Borrowed(&data_2),
             },
         ])
         .unwrap();
     let download = context.download(&buffers, &[]).unwrap();
     assert_eq!(download.buffers[&buffers[0]][..1024], *data_1);
     assert_eq!(download.buffers[&buffers[1]][..1024], *data_2);
+}
+
+#[test]
+fn fill_buffer() {
+    let render_size = vk::Extent2D::default().width(1024).height(1024);
+    let mut context = Context::new(None, render_size).unwrap();
+    let buffer = create_test_buffer(&mut context, 256);
+    let download = context
+        .fill_buffer(&buffer, 0xdeadbeef_u32)
+        .unwrap()
+        .download(&[buffer.clone()], &[])
+        .unwrap();
+    let data: &[u32] = bytemuck::cast_slice(&download.buffers[&buffer]);
+    assert_eq!(data, &[0xdeadbeef_u32; 64]);
 }

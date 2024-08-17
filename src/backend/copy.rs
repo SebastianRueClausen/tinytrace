@@ -1,12 +1,13 @@
 use super::{resource, sync::Access, Buffer, Context, Error, Handle, Image, Lifetime};
 use ash::vk;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct BufferWrite<'a> {
     pub buffer: Handle<Buffer>,
-    pub data: &'a [u8],
+    pub data: Cow<'a, [u8]>,
 }
 
 #[derive(Debug)]
@@ -14,7 +15,8 @@ pub struct ImageWrite<'a> {
     pub image: Handle<Image>,
     pub offset: vk::Offset3D,
     pub extent: vk::Extent3D,
-    pub mips: &'a [Box<[u8]>],
+    // FIXME: This is kind of an annoying type.
+    pub mips: Cow<'a, [Box<[u8]>]>,
 }
 
 /// Data of the downloaded resources.

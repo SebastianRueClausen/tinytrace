@@ -125,7 +125,7 @@ pub struct Context {
     command_buffers: Vec<CommandBuffer>,
     bound_shader: Option<BoundShader>,
     /// The index of the last acquired swapchain swapchain image.
-    acquired_swapchain_image: Option<usize>,
+    acquired_swapchain_image: Option<Handle<Image>>,
     /// Map from path to source of shader includes.
     includes: HashMap<&'static str, String>,
     sync: Sync,
@@ -350,9 +350,8 @@ impl Context {
             self.sync.wait_for_timestamp(&self.device, timestamp)?;
         }
         let (swapchain, images) = self.swapchain();
-        let index = swapchain.image_index(self.sync.frame(0).acquired)?;
-        let image = images[index].clone();
-        self.acquired_swapchain_image = Some(index);
+        let image = images[swapchain.image_index(self.sync.frame(0).acquired)?].clone();
+        self.acquired_swapchain_image = Some(image.clone());
         Ok(image)
     }
 
@@ -371,19 +370,16 @@ impl Context {
         Ok(())
     }
 
-    pub fn present(&mut self, image: &Handle<Image>) -> Result<(), Error> {
-        let access = Access {
-            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-            access: vk::AccessFlags2::empty(),
-        };
-        self.access_resources(&[(image.clone(), access)], &[], &[], &[])?;
-        let timestamp = self.execute_commands(true)?;
-        if let Some(image_index) = self.acquired_swapchain_image.take().map(|i| i as u32) {
-            assert_eq!(
-                self.image(image).swapchain_index,
-                Some(image_index),
-                "trying to present wrong image"
-            );
+    pub fn present(&mut self) -> Result<(), Error> {
+        if let Some(image) = self.acquired_swapchain_image.take() {
+            let access = Access {
+                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                access: vk::AccessFlags2::empty(),
+            };
+            self.access_resources(&[(image.clone(), access)], &[], &[], &[])?;
+            // Execute all pending commands.
+            let timestamp = self.execute_commands(true)?;
+            let image_index = self.image(&image).swapchain_index.unwrap();
             let (swapchain, _) = self.swapchain();
             let present_result =
                 swapchain.present(&self.device, self.sync.frame(0).released, image_index);

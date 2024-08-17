@@ -19,7 +19,7 @@ use backend::{
     ImageRequest, Lifetime, MemoryLocation,
 };
 use camera::Camera;
-use error::Error;
+pub use error::Error;
 use glam::{Mat4, UVec2, Vec2, Vec4};
 use integrate::{HashGridLayout, Integrator};
 use post_process::PostProcess;
@@ -109,7 +109,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn render_to_target(&mut self) -> Result<(), Error> {
+    pub fn render_to_target(&mut self) -> Result<(), Error> {
         let (view, proj) = (self.camera.view(), self.camera.proj());
         let proj_view = proj * view;
         let constants = Constants {
@@ -131,7 +131,7 @@ impl Renderer {
 
         self.context.write_buffers(&[BufferWrite {
             buffer: self.constants.clone(),
-            data: bytemuck::bytes_of(&constants),
+            data: bytemuck::bytes_of(&constants).into(),
         }])?;
 
         self.integrator.integrate(
@@ -141,17 +141,7 @@ impl Renderer {
             &self.render_target,
         )?;
 
-        /*
-        if self.context.frame_index() % 1000 == 0 && self.context.frame_index() != 0 {
-            let download = self
-                .context
-                .download(&[self.integrator.reservoir_pools.values.clone()], &[])
-                .unwrap();
-            let reservoir_pools: &[ReservoirPool] =
-                bytemuck::cast_slice(&download.buffers[&self.integrator.reservoir_pools.values]);
-            println!("{:#?}", &reservoir_pools[32]);
-        }
-        */
+        self.accumulated_frame_count += 1;
 
         Ok(())
     }
@@ -160,21 +150,23 @@ impl Renderer {
         self.accumulated_frame_count = 0;
     }
 
-    pub fn render_to_surface(&mut self) -> Result<(), Error> {
-        self.render_to_target()?;
+    pub fn prepare_to_present(&mut self) -> Result<Handle<Image>, Error> {
+        let swapchain_image = self.context.swapchain_image()?;
         let post_process = self
             .post_process
             .as_mut()
             .expect("renderer doesn't have a surface");
-        let swapchain_image = self.context.swapchain_image()?;
         post_process.run(
             &mut self.context,
             &self.constants,
             &self.render_target,
             &swapchain_image,
         )?;
-        self.accumulated_frame_count += 1;
-        self.context.present(&swapchain_image).map_err(Error::from)
+        Ok(swapchain_image)
+    }
+
+    pub fn present(&mut self) -> Result<(), Error> {
+        self.context.present().map_err(Error::from)
     }
 
     pub fn render_to_texture(&mut self) -> Result<Box<[Vec4]>, Error> {

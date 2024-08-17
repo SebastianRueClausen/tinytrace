@@ -36,6 +36,7 @@ impl PostProcess {
                 block_size: vk::Extent2D::default().width(32).height(32),
                 source: include_str!("display.glsl"),
                 includes: &["tonemap", "scene"],
+                push_constant_size: None,
                 bindings,
             },
         )?;

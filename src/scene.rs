@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::mem;
 
 use ash::vk;
@@ -62,7 +63,7 @@ impl Scene {
                 offset: vk::Offset3D::default(),
                 extent: context.image(image).extent,
                 image: image.clone(),
-                mips: &texture.mips,
+                mips: Cow::Borrowed(&texture.mips),
             })
             .collect();
         context.write_images(&image_writes).unwrap();
@@ -223,7 +224,7 @@ fn scene_buffer_write<'a, T: bytemuck::NoUninit>(
     data: &'a [T],
 ) -> BufferWrite<'a> {
     BufferWrite {
-        data: bytemuck::cast_slice(data),
+        data: bytemuck::cast_slice(data).into(),
         buffer: buffer.clone(),
     }
 }

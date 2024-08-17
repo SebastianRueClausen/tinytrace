@@ -922,7 +922,7 @@ impl Context {
             .primitive_count(instance_data.len() as u32);
         self.write_buffers(&[BufferWrite {
             buffer: self.tlas(tlas).instances.clone(),
-            data: bytemuck::cast_slice(&instance_data),
+            data: bytemuck::cast_slice(&instance_data).into(),
         }])?;
         let scratch_access = Access {
             stage: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,

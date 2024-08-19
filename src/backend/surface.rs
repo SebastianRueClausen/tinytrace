@@ -1,5 +1,6 @@
 use std::slice;
 
+use ash::vk::SurfaceKHR;
 use ash::{khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -21,10 +22,10 @@ impl Swapchain {
         device: &Device,
         window: RawWindowHandle,
         display: RawDisplayHandle,
-        extent: vk::Extent2D,
     ) -> Result<(Self, Vec<Image>), Error> {
         let (surface_loader, surface) = create_surface(instance, window, display)?;
         let swapchain_loader = khr::swapchain::Device::new(instance, device);
+        let extent = current_extent(device, surface, &surface_loader)?;
         let (swapchain, format) = create_swapchain(
             device,
             &swapchain_loader,
@@ -44,7 +45,8 @@ impl Swapchain {
         Ok((swapchain, images))
     }
 
-    pub fn recreate(&mut self, device: &Device, extent: vk::Extent2D) -> Result<Vec<Image>, Error> {
+    pub fn recreate(&mut self, device: &Device) -> Result<Vec<Image>, Error> {
+        let extent = current_extent(device, self.surface, &self.surface_loader)?;
         let old_swapchain = self.swapchain;
         (self.swapchain, self.format) = create_swapchain(
             device,
@@ -66,7 +68,7 @@ impl Swapchain {
         )
     }
 
-    pub fn destroy(&self, _device: &Device) {
+    pub fn destroy(&self) {
         unsafe {
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
@@ -97,6 +99,18 @@ impl Swapchain {
         })
         .map(|_| ())
     }
+}
+
+fn current_extent(
+    device: &Device,
+    surface: SurfaceKHR,
+    surface_loader: &khr::surface::Instance,
+) -> Result<vk::Extent2D, Error> {
+    Ok(unsafe {
+        surface_loader
+            .get_physical_device_surface_capabilities(device.physical_device, surface)?
+            .current_extent
+    })
 }
 
 fn handle_present_result<T>(result: Result<T, vk::Result>) -> Result<T, Error> {
@@ -179,7 +193,7 @@ fn create_swapchain(
                 })
                 .unwrap_or(vk::CompositeAlphaFlagsKHR::INHERIT)
         })
-        .present_mode(vk::PresentModeKHR::FIFO);
+        .present_mode(vk::PresentModeKHR::MAILBOX);
     let swapchain = unsafe { loader.create_swapchain(&swapchain_info, None)? };
     Ok((swapchain, format))
 }

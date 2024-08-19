@@ -19,8 +19,7 @@ fn create_storage_buffer(context: &mut Context) -> Handle<Buffer> {
 
 #[test]
 fn compute_shader() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
 
     let a = create_storage_buffer(&mut context);
     let b = create_storage_buffer(&mut context);
@@ -88,8 +87,7 @@ fn compute_shader() {
 
 #[test]
 fn push_constant() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let dst = create_storage_buffer(&mut context);
     let bindings = &[Binding {
         name: "dst",

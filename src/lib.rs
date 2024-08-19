@@ -45,7 +45,7 @@ impl Renderer {
         extent: vk::Extent2D,
     ) -> Result<Self, Error> {
         let scene = asset::Scene::default();
-        let mut context = Context::new(window, extent)?;
+        let mut context = Context::new(window)?;
         context.add_include("constants", include_str!("includes/constants.glsl").into());
         context.add_include(
             "octahedron",
@@ -101,7 +101,7 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<(), Error> {
-        self.context.resize_surface(extent)?;
+        self.context.resize_surface()?;
         self.render_target = create_render_target(&mut self.context, extent)?;
         self.camera.aspect = extent.width as f32 / extent.height as f32;
         self.extent = extent;

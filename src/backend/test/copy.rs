@@ -11,8 +11,7 @@ fn random_bytes(count: usize) -> Box<[u8]> {
 
 #[test]
 fn transfer() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let buffer = create_test_buffer(&mut context, 1024);
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
@@ -49,8 +48,7 @@ fn transfer() {
 
 #[test]
 fn transfer_image_mips() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let extent = vk::Extent3D::default().width(32).height(32).depth(1);
     let image = context
         .create_image(
@@ -84,8 +82,7 @@ fn transfer_image_mips() {
 
 #[test]
 fn odd_sized_images() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
 
     let a_extent = vk::Extent3D::default().width(83).height(47).depth(1);
     let b_extent = vk::Extent3D::default().width(97).height(59).depth(1);
@@ -140,8 +137,7 @@ fn odd_sized_images() {
 
 #[test]
 fn odd_sized_buffers() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let a = create_test_buffer(&mut context, 7919);
     let b = create_test_buffer(&mut context, 7727);
     let a_data = random_bytes(context.buffer(&a).size as usize);
@@ -165,8 +161,7 @@ fn odd_sized_buffers() {
 
 #[test]
 fn large_buffers() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let buffers: Vec<_> = (0..2)
         .map(|_| {
             context
@@ -202,8 +197,7 @@ fn large_buffers() {
 
 #[test]
 fn fill_buffer() {
-    let render_size = vk::Extent2D::default().width(1024).height(1024);
-    let mut context = Context::new(None, render_size).unwrap();
+    let mut context = Context::new(None).unwrap();
     let buffer = create_test_buffer(&mut context, 256);
     let download = context
         .fill_buffer(&buffer, 0xdeadbeef_u32)

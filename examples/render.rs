@@ -1,14 +1,17 @@
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use std::{mem, thread};
 
 use ash::vk;
 use bit_set::BitSet;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
-use tinytrace::error::{ErrorKind, Result};
+use tinytrace::error::ErrorKind;
 use tinytrace::{asset, backend, Renderer};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
@@ -16,7 +19,7 @@ use winit::window::{Window, WindowId};
 
 struct App {
     render_state: Option<RenderState>,
-    scene: asset::Scene,
+    scene_controller: SceneController,
 }
 
 impl ApplicationHandler for App {
@@ -33,7 +36,7 @@ impl ApplicationHandler for App {
             window.display_handle().unwrap().as_raw(),
         ));
         let mut renderer = Renderer::new(window_handles, extent).unwrap();
-        renderer.set_scene(&self.scene).unwrap();
+        renderer.set_scene(&self.scene_controller.scene).unwrap();
         self.render_state = Some(RenderState {
             gui: Gui::new(&mut renderer.context, event_loop).unwrap().into(),
             camera_controller: CameraController::default(),
@@ -64,7 +67,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
         if let Some(render_state) = &mut self.render_state {
-            render_state.render();
+            render_state.render(&mut self.scene_controller);
         }
     }
 }
@@ -73,8 +76,8 @@ struct RenderState {
     window: Window,
     renderer: Renderer,
     last_update: Instant,
-    gui: Gui,
     camera_controller: CameraController,
+    gui: Gui,
 }
 
 impl RenderState {
@@ -98,6 +101,7 @@ impl RenderState {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.camera_controller.modifier_change(modifiers.state());
             }
+            WindowEvent::Resized(size) => self.handle_resize(*size),
             WindowEvent::CursorMoved { position, .. } => {
                 self.camera_controller
                     .mouse_moved(Vec2::new(position.x as f32, position.y as f32));
@@ -106,12 +110,16 @@ impl RenderState {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self, scene_controller: &mut SceneController) {
         self.window.request_redraw();
+        if let Some(scene) = scene_controller.load.update() {
+            self.renderer.set_scene(&scene).unwrap();
+            scene_controller.scene = scene;
+        }
         let dt = self.last_update.elapsed();
         self.last_update = Instant::now();
         let previous_camera = self.renderer.camera;
-        let egui_output = self.run_gui();
+        let egui_output = self.run_gui(scene_controller);
         let camera_move = self
             .camera_controller
             .camera_move(&self.renderer.camera, dt);
@@ -133,27 +141,34 @@ impl RenderState {
         }
     }
 
+    fn handle_resize(&mut self, size: PhysicalSize<u32>) {
+        self.renderer
+            .resize(vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            })
+            .unwrap();
+    }
+
     fn handle_error(&mut self, error: &tinytrace::Error) {
         if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
-            self.renderer
-                .resize(vk::Extent2D {
-                    width: self.window.inner_size().width,
-                    height: self.window.inner_size().height,
-                })
-                .unwrap();
+            self.handle_resize(self.window.inner_size());
         } else {
             panic!("unexpected error: {error}")
         }
     }
 
-    fn run_gui(&mut self) -> egui::FullOutput {
+    fn run_gui(&mut self, scene_controller: &mut SceneController) -> egui::FullOutput {
         let raw_input = self.gui.egui_winit_state.take_egui_input(&self.window);
         self.gui.egui_context.run(raw_input, |egui_context| {
             egui::Window::new("Render Control")
                 .resizable(true)
                 .show(egui_context, |ui| {
+                    ui.collapsing("Scene", |ui| {
+                        scene_controller.gui(ui);
+                    });
                     ui.collapsing("Camera", |ui| {
-                        camera_gui(&mut self.camera_controller, &mut self.renderer.camera, ui);
+                        self.camera_controller.gui(&mut self.renderer.camera, ui);
                     });
                 });
         })
@@ -163,7 +178,7 @@ impl RenderState {
         &mut self,
         render_target: &backend::Handle<backend::Image>,
         egui_output: egui::FullOutput,
-    ) -> Result<()> {
+    ) -> Result<(), tinytrace::Error> {
         let pixels_per_point = self.gui.egui_context.pixels_per_point();
         self.gui.renderer.render(
             &mut self.renderer.context,
@@ -188,7 +203,10 @@ struct Gui {
 }
 
 impl Gui {
-    fn new(context: &mut backend::Context, event_loop: &ActiveEventLoop) -> Result<Self> {
+    fn new(
+        context: &mut backend::Context,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<Self, tinytrace::Error> {
         let egui_context = egui::Context::default();
         let viewport_id = egui_context.viewport_id();
         Ok(Self {
@@ -206,26 +224,85 @@ impl Gui {
     }
 }
 
-fn camera_gui(camera_controller: &mut CameraController, camera: &mut Camera, ui: &mut egui::Ui) {
-    egui::Grid::new("transform").show(ui, |ui| {
-        ui.label("Acceleration");
-        ui.add(egui::DragValue::new(&mut camera_controller.acceleration).speed(0.1));
-        ui.end_row();
+#[derive(Default)]
+enum SceneLoad {
+    #[default]
+    Empty,
+    Loaded(PathBuf),
+    Error(String),
+    Loading {
+        thread: thread::JoinHandle<Result<asset::Scene, asset::Error>>,
+        path: PathBuf,
+    },
+}
 
-        ui.label("Sensitivity");
-        ui.add(egui::DragValue::new(&mut camera_controller.sensitivity).speed(0.1));
-        ui.end_row();
+impl SceneLoad {
+    fn start_loading(&mut self, path: PathBuf) {
+        *self = Self::Loading {
+            path: path.clone(),
+            thread: thread::spawn(move || asset::Scene::from_gltf(&path)),
+        };
+    }
 
-        ui.label("Position");
-        ui.add(egui::DragValue::new(&mut camera.position.x));
-        ui.add(egui::DragValue::new(&mut camera.position.y));
-        ui.add(egui::DragValue::new(&mut camera.position.z));
-        ui.end_row();
+    fn gui(&self, ui: &mut egui::Ui) {
+        match self {
+            Self::Loaded(path) => {
+                ui.label(format!("'{path:?}' is loaded"));
+            }
+            Self::Error(error) => {
+                ui.label(format!("Failed to load scene: {error}"));
+            }
+            Self::Loading { path, .. } => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(format!("Loading scene {path:?}"))
+                });
+            }
+            Self::Empty => (),
+        };
+    }
 
-        ui.label("Field of view");
-        ui.drag_angle(&mut camera.fov);
-        ui.end_row();
-    });
+    fn update(&mut self) -> Option<asset::Scene> {
+        match mem::take(self) {
+            Self::Loading { thread, path } if thread.is_finished() => {
+                match thread.join().unwrap() {
+                    Ok(scene) => {
+                        *self = Self::Loaded(path.clone());
+                        Some(scene)
+                    }
+                    Err(error) => {
+                        *self = Self::Error(error.to_string());
+                        None
+                    }
+                }
+            }
+            stage => {
+                *self = stage;
+                None
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct SceneController {
+    path: String,
+    load: SceneLoad,
+    scene: asset::Scene,
+}
+
+impl SceneController {
+    fn gui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let label = ui.label("Scene path");
+            ui.text_edit_singleline(&mut self.path)
+                .labelled_by(label.id);
+            if ui.button("Load").clicked() {
+                self.load.start_loading(PathBuf::from(&self.path));
+            }
+        });
+        self.load.gui(ui);
+    }
 }
 
 struct CameraController {
@@ -240,6 +317,28 @@ struct CameraController {
 }
 
 impl CameraController {
+    fn gui(&mut self, camera: &mut Camera, ui: &mut egui::Ui) {
+        egui::Grid::new("transform").show(ui, |ui| {
+            ui.label("Acceleration");
+            ui.add(egui::DragValue::new(&mut self.acceleration).speed(0.1));
+            ui.end_row();
+
+            ui.label("Sensitivity");
+            ui.add(egui::DragValue::new(&mut self.sensitivity).speed(0.1));
+            ui.end_row();
+
+            ui.label("Position");
+            ui.add(egui::DragValue::new(&mut camera.position.x));
+            ui.add(egui::DragValue::new(&mut camera.position.y));
+            ui.add(egui::DragValue::new(&mut camera.position.z));
+            ui.end_row();
+
+            ui.label("Field of view");
+            ui.drag_angle(&mut camera.fov);
+            ui.end_row();
+        });
+    }
+
     fn mouse_moved(&mut self, to: Vec2) {
         let position = self.mouse_position.unwrap_or(to);
         let delta = self.mouse_delta.unwrap_or_default();
@@ -272,6 +371,7 @@ impl CameraController {
         let dt = dt.as_secs_f32();
 
         self.velocity -= self.velocity * self.drag * dt.min(1.0);
+        let right = camera.right();
 
         if self.is_key_pressed(KeyCode::KeyW) {
             self.velocity -= camera.forward * self.acceleration * dt;
@@ -279,9 +379,6 @@ impl CameraController {
         if self.is_key_pressed(KeyCode::KeyS) {
             self.velocity += camera.forward * self.acceleration * dt;
         }
-
-        let right = camera.right();
-
         if self.is_key_pressed(KeyCode::KeyA) {
             self.velocity -= right * self.acceleration * dt;
         }
@@ -320,7 +417,10 @@ fn main() {
     let scene = tinytrace::asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
     let mut app = App {
         render_state: None,
-        scene,
+        scene_controller: SceneController {
+            scene,
+            ..Default::default()
+        },
     };
     let event_loop = EventLoop::new().unwrap();
     event_loop.run_app(&mut app).unwrap();

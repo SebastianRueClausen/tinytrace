@@ -147,7 +147,7 @@ impl Drop for Context {
         }
         self.sync.destroy(&self.device);
         if let Some((swapchain, _)) = &self.swapchain {
-            swapchain.destroy(&self.device);
+            swapchain.destroy();
         }
         self.device.destroy();
         self.instance.destroy();
@@ -155,17 +155,14 @@ impl Drop for Context {
 }
 
 impl Context {
-    pub fn new(
-        window: Option<(RawWindowHandle, RawDisplayHandle)>,
-        extent: vk::Extent2D,
-    ) -> Result<Self, Error> {
+    pub fn new(window: Option<(RawWindowHandle, RawDisplayHandle)>) -> Result<Self, Error> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
 
         let (mut static_pool, mut surface_pool) = (Pool::default(), Pool::default());
 
         let swapchain = if let Some((window, display)) = window {
-            let (swapchain, images) = Swapchain::new(&instance, &device, window, display, extent)?;
+            let (swapchain, images) = Swapchain::new(&instance, &device, window, display)?;
             let images = images
                 .into_iter()
                 .map(|image| Handle::new(Lifetime::Surface, 0, &mut surface_pool.images, image))
@@ -355,14 +352,14 @@ impl Context {
         Ok(image)
     }
 
-    pub fn resize_surface(&mut self, extent: vk::Extent2D) -> Result<(), Error> {
+    pub fn resize_surface(&mut self) -> Result<(), Error> {
         // We have to wait until idle here because we don't use fences when presenting.
         self.device.wait_until_idle()?;
         let pool = self.pools.entry(Lifetime::Surface).or_default();
         pool.clear(&self.sync, &self.device)?;
         if let Some((swapchain, images)) = &mut self.swapchain {
             *images = swapchain
-                .recreate(&self.device, extent)?
+                .recreate(&self.device)?
                 .into_iter()
                 .map(|image| Handle::new(Lifetime::Surface, pool.epoch, &mut pool.images, image))
                 .collect();

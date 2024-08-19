@@ -1,3 +1,5 @@
+#include "<bindings>"
+
 layout (push_constant) uniform PushConstant {
     uint value;
 };

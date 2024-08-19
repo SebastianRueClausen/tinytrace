@@ -1,3 +1,13 @@
+#include "scene"
+#include "brdf"
+#include "math"
+#include "sample"
+#include "debug"
+#include "restir"
+#include "constants"
+
+#include "<bindings>"
+
 #define HASH_GRID_BUFFER reservoir_pool_hashes
 #define HASH_GRID_INSERT insert_reservoir_pool
 #define HASH_GRID_FIND find_reservoir_pool

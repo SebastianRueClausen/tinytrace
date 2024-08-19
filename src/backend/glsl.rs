@@ -53,27 +53,11 @@ fn binding_format_specifier(ty: &BindingType) -> &'static str {
     }
 }
 
-pub fn render_shader(
-    width: u32,
-    height: u32,
-    source: &str,
-    bindings: &[Binding],
-    includes: &[&str],
-) -> String {
-    let mut glsl = PRELUDE.to_string();
-    writeln!(
-        &mut glsl,
-        "layout (local_size_x = {width}, local_size_y = {height}) in;"
-    )
-    .unwrap();
-    let glsl = includes.iter().fold(glsl, |mut glsl, include| {
-        writeln!(&mut glsl, "#include \"{include}\"").unwrap();
-        glsl
-    });
-    let mut glsl = bindings
+pub fn render_bindings(bindings: &[Binding]) -> String {
+    bindings
         .iter()
         .enumerate()
-        .fold(glsl, |mut glsl, (index, binding)| {
+        .fold(String::new(), |mut glsl, (index, binding)| {
             let format_specifier = binding_format_specifier(&binding.ty);
             let binding = render_binding(binding.name, &binding.ty, index as u32);
             writeln!(
@@ -82,7 +66,9 @@ pub fn render_shader(
             )
             .unwrap();
             glsl
-        });
-    write!(&mut glsl, "{source}").unwrap();
-    glsl
+        })
+}
+
+pub fn render_shader(width: u32, height: u32, source: &str) -> String {
+    format!("{PRELUDE}\nlayout (local_size_x = {width}, local_size_y = {height}) in;\n{source}")
 }

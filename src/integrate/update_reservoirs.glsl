@@ -1,3 +1,10 @@
+#include "random"
+#include "restir"
+#include "math"
+#include "constants"
+
+#include "<bindings>"
+
 #define HASH_GRID_BUFFER reservoir_pool_hashes
 #define HASH_GRID_INSERT insert_reservoir_pool
 #define HASH_GRID_FIND find_reservoir_pool
@@ -5,9 +12,7 @@
 
 void main() {
     uint update_index = gl_GlobalInvocationID.x;
-    if (update_index > constants.reservoir_update_hash_grid.capacity) {
-        return;
-    }
+    if (update_index > constants.reservoir_update_hash_grid.capacity) return;
     Generator generator = init_generator_from_index(update_index, constants.frame_index);
     uint update_count = min(reservoir_updates[update_index].update_count, RESERVOIR_UPDATE_COUNT);
     for (uint path_index = 0; path_index < update_count; path_index++) {

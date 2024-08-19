@@ -37,7 +37,6 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(context: &mut Context, target_format: ImageFormat) -> Result<Self, Error> {
-        context.add_include("egui_types", include_str!("types.glsl").into());
         let bindings = &[
             binding!(storage_buffer, Vertex, vertices, true, false),
             binding!(storage_buffer, uint, indices, true, false),
@@ -50,7 +49,6 @@ impl Renderer {
                 source: include_str!("draw.glsl"),
                 block_size: vk::Extent2D::default().width(32).height(32),
                 push_constant_size: Some(mem::size_of::<DrawParameters>() as u32),
-                includes: &["egui_types"],
                 bindings,
             },
         )?;

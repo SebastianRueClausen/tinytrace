@@ -1,3 +1,10 @@
+struct Vertex {
+    float x, y, u, v;
+    uint color;
+};
+
+#include "<bindings>"
+
 layout (push_constant) uniform DrawParameters {
     vec2 screen_size_in_points;
     uvec2 area_offset, area_size;

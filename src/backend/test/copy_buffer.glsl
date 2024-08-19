@@ -1,4 +1,4 @@
-
+#include "<bindings>"
 
 void main() {
     uint index = gl_GlobalInvocationID.x;

@@ -5,7 +5,7 @@ use ash::vk;
 
 use super::command::CommandBuffer;
 use super::device::Device;
-use super::glsl::render_shader;
+use super::glsl::{render_bindings, render_shader};
 use super::sync::Access;
 use super::{Buffer, Context, Error, Handle, Image, ImageFormat, Lifetime, Sampler, Tlas};
 
@@ -408,7 +408,6 @@ pub struct ShaderRequest<'a> {
     pub source: &'a str,
     pub block_size: vk::Extent2D,
     pub bindings: &'a [Binding],
-    pub includes: &'a [&'a str],
     pub push_constant_size: Option<u32>,
 }
 
@@ -416,22 +415,22 @@ impl Context {
     fn create_shader_module(&self, request: &ShaderRequest) -> Result<vk::ShaderModule, Error> {
         let compiler = shaderc::Compiler::new().unwrap();
         let mut options = shaderc::CompileOptions::new().unwrap();
+        options.set_optimization_level(shaderc::OptimizationLevel::Performance);
         options.set_include_callback(|name, _, _, _| {
-            let Some(content) = self.includes.get(name).cloned() else {
-                panic!("include {name} not found");
+            let content = if name == "<bindings>" {
+                render_bindings(request.bindings)
+            } else {
+                self.includes.get(name).cloned().unwrap_or_else(|| {
+                    panic!("include {name} not found");
+                })
             };
             Ok(shaderc::ResolvedInclude {
                 resolved_name: name.into(),
                 content,
             })
         });
-        let source = render_shader(
-            request.block_size.width,
-            request.block_size.height,
-            request.source,
-            request.bindings,
-            request.includes,
-        );
+        let vk::Extent2D { width, height } = request.block_size;
+        let source = render_shader(width, height, request.source);
         let shader_kind = shaderc::ShaderKind::Compute;
         let output = compiler
             .compile_into_spirv(&source, shader_kind, "shader", "main", Some(&options))
@@ -695,12 +694,13 @@ impl Context {
             panic!("push constant is missing");
         }
 
-        let width = width.div_ceil(shader.block_size.width);
-        let height = height.div_ceil(shader.block_size.height);
-
         unsafe {
-            self.device
-                .cmd_dispatch(self.command_buffer().buffer, width, height, 1);
+            self.device.cmd_dispatch(
+                self.command_buffer().buffer,
+                width.div_ceil(shader.block_size.width),
+                height.div_ceil(shader.block_size.height),
+                1,
+            );
         }
 
         Ok(self)

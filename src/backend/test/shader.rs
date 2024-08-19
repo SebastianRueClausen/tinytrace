@@ -60,7 +60,6 @@ fn compute_shader() {
                 source: include_str!("copy_buffer.glsl"),
                 push_constant_size: None,
                 bindings,
-                includes: &[],
             },
         )
         .unwrap();
@@ -105,7 +104,6 @@ fn push_constant() {
                 source: include_str!("push_constant.glsl"),
                 push_constant_size: Some(mem::size_of::<u32>() as u32),
                 bindings,
-                includes: &[],
             },
         )
         .unwrap();

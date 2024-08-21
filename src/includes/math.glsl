@@ -19,16 +19,9 @@ vec3 gram_schmidt(vec3 normal, vec3 tangent) {
     return normalize(tangent - normal * dot(normal, tangent));
 }
 
-float saturate(float value) {
-    return clamp(value, 0.0, 1.0);
-}
-
-float pow2(float value) {
-    return value * value;
-}
-
-float length_squared(vec2 value) {
-    return dot(value, value);
-}
+float saturate(float value) { return clamp(value, 0.0, 1.0); }
+float pow2(float value) { return value * value; }
+float length_squared(vec2 value) { return dot(value, value); }
+float length_squared(vec3 value) { return dot(value, value); }
 
 #endif

@@ -180,11 +180,13 @@ vec3 normal_bias(vec3 position, vec3 normal) {
     return position + normal * 0.00001;
 }
 
-struct ResamplePath {
-    Path path;
-    float pdf;
-    bool is_found;
-};
+Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
+    Basis surface_basis;
+    surface_basis.normal = transform_to_basis(tangent_space, tangent_space_normal);
+    surface_basis.tangent = gram_schmidt(surface_basis.normal, tangent_space.tangent);
+    surface_basis.bitangent = normalize(cross(surface_basis.normal, surface_basis.tangent));
+    return surface_basis;
+}
 
 struct TracePathConfig {
     uint bounce_count;
@@ -192,179 +194,213 @@ struct TracePathConfig {
     bool resample_path;
 };
 
-vec3 trace_path(
-    Ray ray,
-    inout Generator generator,
-    Generator path_generator,
-    vec2 ndc,
-    TracePathConfig config,
-    out ResamplePath resample_path
-) {
-    vec3 accumulated = vec3(0.0), attenuation = vec3(1.0);
-    vec3 previous_normal, resample_attenuation = vec3(1.0);
-    bool previous_was_diffuse = false;
+// A found (or not found) resample path.
+struct ResamplePath {
+    // The path found.
+    Path path;
+    // The probability density function of generating the path.
+    float pdf;
+    // True if a valid path is found.
+    bool is_found;
+};
 
-    resample_path.is_found = !config.find_resample_path;
-    if (config.find_resample_path) {
-        for (uint i = 0; i < 3; i++) {
-            resample_path.path.radiance[i] = 0.0;
-        }
-    }
+// State required when generating resample paths.
+struct ResampleState {
+    vec3 accumulated, attenuation, previous_normal;
+    // This is true if the previous bounce was "diffuse", which in this context means that the
+    // surface roughness is relatively high. This makes it so that when reconnecting, the different
+    // solid angle won't fall outside the material BRDF.
+    bool previous_bounce_was_diffuse;
+    // The found path origin and destination if a path has been found.
+    BounceSurface origin, destination;
+    // The generator from just before generating a path from `destination`.
+    Generator generator;
+    // The pdf of the found path.
+    float pdf;
+    // True if a path has been found.
+    bool is_found;
+};
 
+ResampleState create_resample_state() {
+    ResampleState resample_state;
+    resample_state.accumulated = vec3(0.0);
+    resample_state.attenuation = vec3(1.0);
+    resample_state.is_found = false;
+    return resample_state;
+}
+
+struct PathState {
+    vec3 accumulated, attenuation;
+    // The two generators. `generator` is used to everything that doens't change the path.
+    // `path_generator` generates the path. This is usefull when replaying paths, which only
+    // requires replacing `path_generator`.
+    Generator generator, path_generator;
+    // The normalized device coordinates. This is only used to calculate the mip level for the
+    // primary hit.
+    vec2 ndc;
+    // The current mip level. It gets increased every bounce by the surface roughness.
     float mip_level;
-    for (uint bounce = 0; bounce < config.bounce_count; bounce++) {
-        RayHit hit;
+    // The next ray to be traced.
+    Ray ray;
+    bool has_left_scene;
+};
 
-        if (!trace_ray(ray, bounce, ndc, hit)) {
-            // return accumulated + attenuation;
-            return vec3(0.0);
-        }
+PathState create_path_state(Generator generator, Generator path_generator, vec2 ndc, Ray ray) {
+    return PathState(vec3(0.0), vec3(1.0), generator, path_generator, ndc, 1.0, ray, false);
+}
 
-        Instance instance = instances[hit.instance];
-        Material material = materials[instance.material];
+LobeType importance_sample(
+    in SurfaceProperties surface, inout Generator generator, vec3 local_view,
+    out vec3 local_scatter, out vec3 local_half_vector, out float pdf
+) {
+    LobeType lobe_type = 0;
+    if (random_float(generator) > surface.metallic) {
+        local_scatter = cosine_hemisphere_sample(generator);
+        local_half_vector = normalize(local_scatter + local_view);
+        lobe_type = DIFFUSE_LOBE;
+    } else {
+        local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+        lobe_type = SPECULAR_LOBE;
+    }
+    pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
+        + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
+    return lobe_type;
+}
 
-        if (bounce == 0) {
-            mip_level = calculate_mip_level(hit.texcoord_ddx, hit.texcoord_ddy);
-        }
-
-        vec3 tangent_space_normal = octahedron_decode(
-            textureLod(textures[material.normal_texture], hit.texcoord, mip_level).xy
-        );
-
-        Basis surface_basis;
-        surface_basis.normal = transform_to_basis(hit.tangent_space, tangent_space_normal);
-        surface_basis.tangent = gram_schmidt(surface_basis.normal, hit.tangent_space.tangent);
-        surface_basis.bitangent = normalize(cross(surface_basis.normal, surface_basis.tangent));
-
-        vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, mip_level)
-            * vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
-
-        vec2 metallic_roughness = textureLod(textures[material.specular_texture], hit.texcoord, mip_level).rg;
-        vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, mip_level).rgb
-            * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
-
-        SurfaceProperties surface;
-        surface.albedo = albedo.rgb;
-        surface.metallic = metallic_roughness.r * material.metallic;
-        surface.roughness = pow2(metallic_roughness.g * material.roughness);
-
-        // Heuristic for mip level.
-        mip_level += surface.roughness;
-
-        surface.fresnel_min = fresnel_min(material.ior, surface.albedo, surface.metallic);
-        surface.fresnel_max = 1.0;
-
-        surface.view_direction = normalize(ray.origin - hit.world_position);
-        surface.normal_dot_view = clamp(dot(surface_basis.normal, surface.view_direction), 0.0001, 1.0);
-
-        vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
-
-        float pdf = 0.0;
-        vec3 radiance = vec3(0.0);
-        vec3 local_scatter, local_half_vector;
-        if (config.resample_path && bounce != 0) {
-            config.resample_path = false;
-            uint64_t key = hash_grid_key(hash_grid_cell(
-                normal_bias(hit.world_position, surface_basis.normal),
-                constants.camera_position.xyz,
-                vec3(0.0),//random_vec3(generator) * 2.0 - 1.0,
-                constants.reservoir_hash_grid
-            ));
-            uint reservoir_pool_index;
-            if (find_reservoir_pool(constants.reservoir_hash_grid, key, reservoir_pool_index)) {
-                Reservoir reservoir =
-                    determine_reservoir_from_pool(reservoir_pools[reservoir_pool_index], generator);
-                // Reconnect with the sample in the reservoir if it's valid.
-                bool can_reconnect = reservoir_is_valid(reservoir)
-                    && can_reconnect_to_path(hit.world_position, surface_basis.normal, reservoir.path);
-                if (can_reconnect) {
-                    path_generator = reservoir.path.generator;
-                    local_scatter = transform_from_basis(surface_basis, normalize(
-                        bounce_surface_position(reservoir.path.destination) - hit.world_position
-                    ));
-                    local_half_vector = normalize(local_scatter + local_view);
-                    float jacobian = path_jacobian(hit.world_position, reservoir.path);
-                    pdf = 1.0 / reservoir.weight * clamp(jacobian, 0.0, 1000.0);
-                }
-            }
-        }
-
-        bool sampled_diffuse = false;
-        Generator before_sample_generator = path_generator;
-
-        if (pdf == 0.0) {
-            if (random_float(path_generator) > surface.metallic) {
-                local_scatter = cosine_hemisphere_sample(path_generator);
-                local_half_vector = normalize(local_scatter + local_view);
-                sampled_diffuse = true;
-            } else {
-                local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, path_generator);
-            }
-            pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
-                + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
-        }
-
-        // Only find a simple resample path per trace for now
-        // (though it would be possible to find multiple).
-        bool can_form_resample_path = !resample_path.is_found
-            // It isn't possible to reconnect the first bounce.
-            && bounce != 0
-            // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
-            // reconnecting doesn't cause the BRDF to become zero.
-            && previous_was_diffuse
-            // The current bounce must be diffuse meaning that it samples the diffuse lope. This
-            // is required to create a successfull reconnecting because diffuse sampling doesn't
-            // depend on the incidence vector, which will be different because of the reconnection.
-            && sampled_diffuse;
-        if (can_form_resample_path) {
-            resample_path.path.origin = create_bounce_surface(ray.origin, previous_normal);
-            resample_path.path.destination =
-                create_bounce_surface(hit.world_position, surface_basis.normal);
-            resample_path.path.generator = before_sample_generator;
-            resample_path.is_found = true;
-            resample_path.pdf = pdf;
-        }
-
-        ray.direction = transform_to_basis(surface_basis, local_scatter);
-        ray.origin = normal_bias(hit.world_position, surface_basis.normal);
-
-        ScatterProperties scatter;
-        scatter.direction = ray.direction;
-        scatter.half_vector = normalize(surface.view_direction + scatter.direction);
-        scatter.normal_dot_half = saturate(dot(surface_basis.normal, scatter.half_vector));
-        scatter.normal_dot_scatter = saturate(dot(surface_basis.normal, scatter.direction));
-        scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
-
-        vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
-
-        accumulated += emissive * attenuation;
-
-        if (resample_path.is_found) {
-            for (uint i = 0; i < 3; i++) {
-                resample_path.path.radiance[i] += emissive[i] * resample_attenuation[i];
-            }
-        }
-
-        // FIXME: The minimum here fixes NaNs appearing sometimes,
-        // most likely because the pdf is very small (it doesn't ever
-        // appear to be 0.0, thus it is likely to be numeric issues and
-        // not algebraic).
-        vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
-
-        attenuation *= attenuation_factor;
-        if (resample_path.is_found) {
-            resample_attenuation *= attenuation_factor;
-        }
-
-        if (length(radiance) > 0.0) {
-            return radiance * attenuation + accumulated;
-        }
-
-        previous_normal = surface_basis.normal;
-        previous_was_diffuse = surface.roughness > 0.25;
+void next_path_segment(
+    inout PathState path_state,
+    inout ResampleState resample_state,
+    inout TracePathConfig config,
+    uint bounce
+) {
+    RayHit hit;
+    if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
+        path_state.has_left_scene = true;
+        return;
     }
 
-    return accumulated;
+    Instance instance = instances[hit.instance];
+    Material material = materials[instance.material];
+
+    // Calculate mip level for the first bounce using ray differentials.
+    if (bounce == 0) {
+        path_state.mip_level = calculate_mip_level(hit.texcoord_ddx, hit.texcoord_ddy);
+    }
+
+    // Create the surface basis from from the normal map.
+    Basis surface_basis = create_surface_basis(hit.tangent_space, octahedron_decode(
+        textureLod(textures[material.normal_texture], hit.texcoord, path_state.mip_level).xy
+    ));
+
+    vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, path_state.mip_level)
+        * vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
+
+    vec2 metallic_roughness = textureLod(textures[material.specular_texture], hit.texcoord, path_state.mip_level).rg;
+    vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, path_state.mip_level).rgb
+        * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
+
+    // Determine the surface properties.
+    SurfaceProperties surface;
+    surface.albedo = albedo.rgb;
+    surface.metallic = metallic_roughness.r * material.metallic;
+    surface.roughness = pow2(metallic_roughness.g * material.roughness);
+    surface.view_direction = normalize(path_state.ray.origin - hit.world_position);
+    surface.normal_dot_view = clamp(dot(surface_basis.normal, surface.view_direction), 0.0001, 1.0);
+    surface.fresnel_min = fresnel_min(material.ior, surface.albedo, surface.metallic);
+    surface.fresnel_max = 1.0;
+
+    // Calculate the view vector local to the surface basis. This is often referred to as wo in
+    // litterature.
+    vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
+
+    float pdf = 0.0;
+    vec3 local_scatter, local_half_vector;
+    if (config.resample_path && bounce != 0) {
+        config.resample_path = false;
+        uint64_t key = hash_grid_key(hash_grid_cell(
+            normal_bias(hit.world_position, surface_basis.normal),
+            constants.camera_position.xyz,
+            vec3(0.0),
+            constants.reservoir_hash_grid
+        ));
+        uint reservoir_pool_index;
+        if (find_reservoir_pool(constants.reservoir_hash_grid, key, reservoir_pool_index)) {
+            Reservoir reservoir =
+                determine_reservoir_from_pool(reservoir_pools[reservoir_pool_index], path_state.generator);
+            // Reconnect with the sample in the reservoir if it's valid.
+            bool can_reconnect = reservoir_is_valid(reservoir)
+                && can_reconnect_to_path(hit.world_position, surface_basis.normal, reservoir.path);
+            if (can_reconnect) {
+                path_state.path_generator = reservoir.path.generator;
+                local_scatter = transform_from_basis(surface_basis, normalize(
+                    bounce_surface_position(reservoir.path.destination) - hit.world_position
+                ));
+                local_half_vector = normalize(local_scatter + local_view);
+                float jacobian = path_jacobian(hit.world_position, reservoir.path);
+                pdf = 1.0 / reservoir.weight * clamp(jacobian, 0.0, 1000.0);
+            }
+        }
+    }
+
+    Generator before_sample_generator = path_state.path_generator;
+    LobeType lobe_type = 0;
+    if (pdf == 0.0) {
+        lobe_type = importance_sample(
+            surface, path_state.path_generator, local_view,
+            local_scatter, local_half_vector, pdf
+        );
+    }
+
+    bool can_form_resample_path = config.find_resample_path
+        // Only find a simple resample path per trace for now
+        && !resample_state.is_found
+        // It isn't possible to reconnect the first bounce.
+        && bounce != 0
+        // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
+        // reconnecting doesn't cause the BRDF to become zero.
+        && resample_state.previous_bounce_was_diffuse
+        // The current bounce must be diffuse meaning that it samples the diffuse lope. This
+        // is required to create a successfull reconnecting because diffuse sampling doesn't
+        // depend on the incidence vector, which will be different because of the reconnection.
+        && lobe_type == DIFFUSE_LOBE;
+    if (can_form_resample_path) {
+        resample_state.origin = create_bounce_surface(path_state.ray.origin, resample_state.previous_normal);
+        resample_state.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
+        resample_state.generator = before_sample_generator;
+        resample_state.pdf = pdf;
+        resample_state.is_found = true;
+    }
+
+    path_state.ray.direction = transform_to_basis(surface_basis, local_scatter);
+    path_state.ray.origin = normal_bias(hit.world_position, surface_basis.normal);
+
+    ScatterProperties scatter;
+    scatter.direction = path_state.ray.direction;
+    scatter.half_vector = normalize(surface.view_direction + scatter.direction);
+    scatter.normal_dot_half = saturate(dot(surface_basis.normal, scatter.half_vector));
+    scatter.normal_dot_scatter = saturate(dot(surface_basis.normal, scatter.direction));
+    scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
+
+    vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
+
+    // FIXME: The minimum here fixes NaNs appearing sometimes,
+    // most likely because the pdf is very small (it doesn't ever
+    // appear to be 0.0, thus it is likely to be numeric issues and
+    // not algebraic).
+    vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
+
+    path_state.accumulated += emissive * path_state.attenuation;
+    path_state.attenuation *= attenuation_factor;
+    if (resample_state.is_found) {
+        resample_state.accumulated += emissive * resample_state.attenuation;
+        resample_state.attenuation *= attenuation_factor;
+    }
+
+    resample_state.previous_normal = surface_basis.normal;
+    resample_state.previous_bounce_was_diffuse = surface.roughness > 0.25;
+
+    // Heuristic for mip level.
+    path_state.mip_level += surface.roughness;
 }
 
 void main() {
@@ -378,20 +414,33 @@ void main() {
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
         bool resample = sample_index % 2 == 1;
         TracePathConfig trace_path_config =
-            TracePathConfig(constants.bounce_count, !resample, resample);
+            TracePathConfig(constants.bounce_count, resample, !resample);
         Generator path_generator =
             init_generator_from_pixel(pixel_index, constants.screen_size, generator.state);
 
         vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
 
-        ResamplePath resample_path;
-        vec3 radiance = trace_path(ray, generator, path_generator, ndc, trace_path_config, resample_path);
-        accumulated += radiance;
+        PathState path_state = create_path_state(generator, path_generator, ndc, ray);
+        ResampleState resample_state = create_resample_state();
 
-        if (resample_path.is_found && path_target_function(resample_path.path) > 0.0) {
+        for (uint bounce = 0; bounce < constants.bounce_count && !path_state.has_left_scene; bounce++) {
+            next_path_segment(path_state, resample_state, trace_path_config, bounce);
+        }
+
+        accumulated += path_state.accumulated;
+
+        if (resample_state.is_found && length_squared(resample_state.accumulated) > 0.0) {
+            // Create path.
+            Path path;
+            path.origin = resample_state.origin;
+            path.destination = resample_state.destination;
+            path.generator = resample_state.generator;
+            for (uint i = 0; i < 3; i++) path.radiance[i] = resample_state.accumulated[i];
+
+            // Insert as a reservoir update.
             uint64_t key = hash_grid_key(hash_grid_cell(
-                bounce_surface_position(resample_path.path.origin),
+                bounce_surface_position(path.origin),
                 constants.camera_position.xyz,
                 vec3(0.0),
                 constants.reservoir_update_hash_grid
@@ -399,9 +448,8 @@ void main() {
             uint slot = hash_grid_hash(key) % constants.reservoir_update_hash_grid.capacity;
             uint update_index = atomicAdd(reservoir_updates[slot].update_count, 1);
             if (update_index < RESERVOIR_UPDATE_COUNT) {
-                reservoir_updates[slot].paths[update_index] = resample_path.path;
-                reservoir_updates[slot].weights[update_index] =
-                    path_target_function(resample_path.path) / resample_path.pdf;
+                reservoir_updates[slot].paths[update_index] = path;
+                reservoir_updates[slot].weights[update_index] = path_target_function(path) / resample_state.pdf;
             }
         }
     }

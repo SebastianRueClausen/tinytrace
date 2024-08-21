@@ -34,9 +34,8 @@ struct ScatterProperties {
 // Christophe Schlick in 1994 (Schlick, 1994) [https://www.researchgate.net/publication/354065225_The_Schlick_Fresnel_Approximation].
 vec3 fresnel_schlick(vec3 fresnel_min, float fresnel_max, float view_dot_half) {
     float flipped = 1.0 - view_dot_half;
-    float flipped_2 = flipped * flipped;
-    float flipped_5 = flipped * flipped_2 * flipped_2;
-    return fresnel_min + (fresnel_max - fresnel_min) * flipped_5;
+    float flipped_2 = pow2(flipped);
+    return fresnel_min + (fresnel_max - fresnel_min) * (pow2(flipped_2) * flipped);
 }
 
 // Models the shadowing and masking effect caused by the microfacets of a surface.
@@ -93,5 +92,9 @@ vec3 burley_diffuse(SurfaceProperties surface, ScatterProperties scatter) {
 vec3 fresnel_min(float ior, vec3 albedo, float metallic) {
     return mix(vec3(pow2((ior - 1.0) / (ior + 1.0))), albedo, metallic);
 }
+
+#define LobeType uint
+const LobeType SPECULAR_LOBE = 0x1;
+const LobeType DIFFUSE_LOBE = 0x2;
 
 #endif

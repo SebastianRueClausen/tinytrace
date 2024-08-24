@@ -11,7 +11,7 @@ mod integrate;
 mod post_process;
 pub mod scene;
 
-use std::mem;
+use std::{fmt, mem};
 
 use ash::vk;
 use backend::{
@@ -20,7 +20,7 @@ use backend::{
 };
 use camera::Camera;
 pub use error::Error;
-use glam::{Mat4, UVec2, Vec2, Vec4};
+use glam::{Mat4, UVec2, Vec4};
 use integrate::{HashGridLayout, Integrator};
 use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -69,7 +69,8 @@ impl Renderer {
                 ty: BufferType::Uniform,
             },
         )?;
-        let integrator = Integrator::new(&mut context, &scene)?;
+        let config = Config::default();
+        let integrator = Integrator::new(&mut context, &config.restir)?;
         let post_process = if window.is_some() {
             Some(PostProcess::new(&mut context)?)
         } else {
@@ -77,12 +78,9 @@ impl Renderer {
         };
         let scene = Scene::new(&mut context, &scene)?;
         Ok(Self {
-            camera: Camera::new(Vec2 {
-                x: extent.width as f32,
-                y: extent.height as f32,
-            }),
-            config: Config::default(),
+            camera: Camera::new(extent.width as f32 / extent.height as f32),
             accumulated_frame_count: 0,
+            config,
             context,
             scene,
             render_target,
@@ -96,7 +94,22 @@ impl Renderer {
     pub fn set_scene(&mut self, scene: &asset::Scene) -> Result<(), Error> {
         self.context.advance_lifetime(Lifetime::Scene)?;
         self.scene = Scene::new(&mut self.context, scene)?;
-        self.integrator = Integrator::new(&mut self.context, scene)?;
+        Ok(())
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn set_config(&mut self, config: Config) -> Result<(), Error> {
+        if self.config != config {
+            self.reset_accumulation();
+            if self.config.restir != config.restir {
+                self.context.advance_lifetime(Lifetime::Renderer)?;
+                self.integrator = Integrator::new(&mut self.context, &config.restir)?;
+            }
+        }
+        self.config = config;
         Ok(())
     }
 
@@ -115,14 +128,17 @@ impl Renderer {
         let constants = Constants {
             screen_size: UVec2::new(self.extent.width, self.extent.height),
             frame_index: self.context.frame_index() as u32,
-            inverse_view: view.inverse(),
-            inverse_proj: proj.inverse(),
             camera_position: self.camera.position.extend(0.0),
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
             reservoir_hash_grid: self.integrator.reservoir_pools.layout,
             reservoir_update_hash_grid: self.integrator.reservoir_updates.layout,
+            use_world_space_restir: self.config.restir.enabled.into(),
+            inverse_view: view.inverse(),
+            inverse_proj: proj.inverse(),
+            tonemap: self.config.tonemap.into(),
+            sample_strategy: self.config.sample_strategy,
             proj_view,
             view,
             proj,
@@ -197,7 +213,7 @@ fn create_render_target(
 }
 
 #[repr(C)]
-#[derive(bytemuck::NoUninit, bytemuck::AnyBitPattern, Debug, Clone, Copy, Default)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default)]
 struct Constants {
     view: Mat4,
     proj: Mat4,
@@ -212,20 +228,79 @@ struct Constants {
     reservoir_hash_grid: HashGridLayout,
     reservoir_update_hash_grid: HashGridLayout,
     screen_size: UVec2,
-    padding: [u32; 2],
+    use_world_space_restir: u32,
+    tonemap: u32,
+    sample_strategy: SampleStrategy,
+    padding: [u32; 3],
+}
+
+#[repr(u32)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SampleStrategy {
+    UniformHemisphere = 1,
+    CosineHemisphere = 2,
+    #[default]
+    Brdf = 3,
+}
+
+impl fmt::Display for SampleStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UniformHemisphere => write!(f, "Uniform Hemisphere"),
+            Self::CosineHemisphere => write!(f, "Cosine Hemisphere"),
+            Self::Brdf => write!(f, "BRDF"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RestirConfig {
+    pub enabled: bool,
+    pub cell_scale: f32,
+    pub update_hash_grid_capacity: u32,
+    pub reservoir_hash_grid_capacity: u32,
+}
+
+impl PartialEq for RestirConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.update_hash_grid_capacity == other.update_hash_grid_capacity
+            && self.reservoir_hash_grid_capacity == other.reservoir_hash_grid_capacity
+            && (self.cell_scale - other.cell_scale).abs() < 1e-4
+    }
+}
+
+impl Eq for RestirConfig {}
+
+impl Default for RestirConfig {
+    fn default() -> Self {
+        Self {
+            update_hash_grid_capacity: 0xffff,
+            reservoir_hash_grid_capacity: 0xfffff,
+            enabled: true,
+            cell_scale: 10.0,
+        }
+    }
 }
 
 /// Configuration of the renderer.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Config {
     /// The number of ray bounces.
     pub bounce_count: u32,
     /// The number of samples per pixel.
     pub sample_count: u32,
+    pub tonemap: bool,
+    pub sample_strategy: SampleStrategy,
+    pub restir: RestirConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            restir: RestirConfig::default(),
+            sample_strategy: SampleStrategy::default(),
+            tonemap: true,
             bounce_count: 6,
             sample_count: 2,
         }

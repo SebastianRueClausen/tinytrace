@@ -5,6 +5,17 @@
 #include "random"
 #include "brdf"
 
+#define SampleStrategy uint
+const SampleStrategy UNIFORM_HEMISPHERE_SAMPLING = 1;
+const SampleStrategy COSINE_HEMISPHERE_SAMPLING= 2;
+const SampleStrategy BRDF_SAMPLING = 2;
+
+vec3 uniform_hemisphere_sample(inout Generator generator) {
+    float theta = 2.0 * PI * random_float(generator);
+    float phi = acos(1.0 - random_float(generator));
+    return vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+}
+
 vec2 sample_disk(inout Generator generator) {
     vec2 u = 2.0 * vec2(random_float(generator), random_float(generator)) - 1.0;
     if (u.x == 0.0 && u.y == 0.0) return vec2(0.0);

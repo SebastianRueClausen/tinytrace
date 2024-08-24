@@ -384,8 +384,8 @@
           0.68,
           1.0
         ],
-        "metallicFactor": 1.0,
-        "roughnessFactor": 0.2
+        "metallicFactor": 0.0,
+        "roughnessFactor": 1.0
       }
     },
     {
@@ -414,7 +414,7 @@
       },
       "extensions": {
         "KHR_materials_emissive_strength": {
-          "emissiveStrength": 24
+          "emissiveStrength": 20
         }
       }
     },

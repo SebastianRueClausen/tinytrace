@@ -60,6 +60,8 @@ pub enum Lifetime {
     Scene,
     /// The resource only lives for the current frame.
     Frame,
+    /// Data related to the renderer, meaning it is cleared when the renderer is reconfigured.
+    Renderer,
 }
 
 #[derive(Default, Debug)]

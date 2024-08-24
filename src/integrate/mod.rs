@@ -8,10 +8,10 @@ use crate::backend::{
     Binding, BindingType, Buffer, BufferRequest, BufferType, Handle, Image, Lifetime,
     MemoryLocation, Shader, ShaderRequest,
 };
-use crate::binding;
 use crate::error::Result;
 use crate::scene::Scene;
-use crate::{asset, Context};
+use crate::Context;
+use crate::{binding, RestirConfig};
 
 pub(super) struct HashGrid {
     pub hashes: Handle<Buffer>,
@@ -26,7 +26,7 @@ impl HashGrid {
         layout: HashGridLayout,
     ) -> Result<Self> {
         let hashes = context.create_buffer(
-            Lifetime::Scene,
+            Lifetime::Renderer,
             &BufferRequest {
                 size: (mem::size_of::<u64>() * layout.capacity as usize) as vk::DeviceSize,
                 ty: BufferType::Storage,
@@ -34,7 +34,7 @@ impl HashGrid {
             },
         )?;
         let values = context.create_buffer(
-            Lifetime::Scene,
+            Lifetime::Renderer,
             &BufferRequest {
                 size: (value_size * layout.capacity as usize) as vk::DeviceSize,
                 ty: BufferType::Storage,
@@ -74,7 +74,7 @@ pub struct Integrator {
 }
 
 impl Integrator {
-    pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self> {
+    pub fn new(context: &mut Context, restir_config: &RestirConfig) -> Result<Self> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(storage_buffer, Vertex, vertices, true, false),
@@ -105,10 +105,10 @@ impl Integrator {
                 None,
                 true
             ),
-            binding!(sampled_image, textures, Some(scene.textures.len() as u32)),
+            binding!(sampled_image, textures, Some(1024)),
         ];
         let integrate = context.create_shader(
-            Lifetime::Scene,
+            Lifetime::Renderer,
             &ShaderRequest {
                 block_size: vk::Extent2D::default().width(32).height(32),
                 source: include_str!("integrate.glsl"),
@@ -136,7 +136,7 @@ impl Integrator {
             ),
         ];
         let update_reservoirs = context.create_shader(
-            Lifetime::Scene,
+            Lifetime::Renderer,
             &ShaderRequest {
                 block_size: vk::Extent2D::default().width(256).height(1),
                 source: include_str!("update_reservoirs.glsl"),
@@ -145,21 +145,21 @@ impl Integrator {
             },
         )?;
         let hash_grid_layout = |bucket_size, capacity| HashGridLayout {
-            padding: 0,
-            scene_scale: 20.0,
+            scene_scale: restir_config.cell_scale,
             bucket_size,
             capacity,
+            padding: 0,
         };
         Ok(Self {
             reservoir_pools: HashGrid::new(
                 context,
                 mem::size_of::<restir::ReservoirPool>(),
-                hash_grid_layout(64, 0xfffff),
+                hash_grid_layout(64, restir_config.reservoir_hash_grid_capacity),
             )?,
             reservoir_updates: HashGrid::new(
                 context,
                 mem::size_of::<restir::ReservoirUpdate>(),
-                hash_grid_layout(1, 0xffff),
+                hash_grid_layout(1, restir_config.update_hash_grid_capacity),
             )?,
             update_reservoirs,
             integrate,

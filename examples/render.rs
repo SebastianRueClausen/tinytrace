@@ -8,7 +8,7 @@ use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
 use tinytrace::error::ErrorKind;
-use tinytrace::{asset, backend, Renderer};
+use tinytrace::{asset, backend, Renderer, SampleStrategy};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -40,6 +40,7 @@ impl ApplicationHandler for App {
         self.render_state = Some(RenderState {
             gui: Gui::new(&mut renderer.context, event_loop).unwrap().into(),
             camera_controller: CameraController::default(),
+            renderer_controller: RendererController::default(),
             last_update: Instant::now(),
             window,
             renderer,
@@ -77,6 +78,7 @@ struct RenderState {
     renderer: Renderer,
     last_update: Instant,
     camera_controller: CameraController,
+    renderer_controller: RendererController,
     gui: Gui,
 }
 
@@ -169,6 +171,14 @@ impl RenderState {
                     });
                     ui.collapsing("Camera", |ui| {
                         self.camera_controller.gui(&mut self.renderer.camera, ui);
+                    });
+                    ui.collapsing("Renderer", |ui| {
+                        self.renderer_controller.gui(ui);
+                        if &self.renderer_controller.config != self.renderer.config() {
+                            self.renderer
+                                .set_config(self.renderer_controller.config)
+                                .unwrap();
+                        }
                     });
                 });
         })
@@ -302,6 +312,75 @@ impl SceneController {
             }
         });
         self.load.gui(ui);
+    }
+}
+
+#[derive(Default)]
+struct RendererController {
+    config: tinytrace::Config,
+}
+
+impl RendererController {
+    fn gui(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("renderer").show(ui, |ui| {
+            let mut drag_value = |value: &mut u32, label: &str| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(value));
+                ui.end_row();
+            };
+            drag_value(&mut self.config.sample_count, "Sample count");
+            drag_value(&mut self.config.bounce_count, "Bounce count");
+            egui::ComboBox::from_label("Sample strategy")
+                .selected_text(format!("{}", self.config.sample_strategy))
+                .show_ui(ui, |ui| {
+                    let mut option = |value| {
+                        ui.selectable_value(
+                            &mut self.config.sample_strategy,
+                            value,
+                            format!("{value}"),
+                        );
+                    };
+                    option(SampleStrategy::UniformHemisphere);
+                    option(SampleStrategy::CosineHemisphere);
+                    option(SampleStrategy::Brdf);
+                });
+            ui.end_row();
+            let mut checkbox = |value: &mut bool, label: &str| {
+                ui.add(egui::Checkbox::new(value, label));
+                ui.end_row();
+            };
+            checkbox(&mut self.config.tonemap, "Enable tonemapping");
+            checkbox(&mut self.config.restir.enabled, "Enable world space ReSTIR");
+            ui.add_enabled_ui(self.config.restir.enabled, |ui| {
+                egui::Grid::new("restir").show(ui, |ui| {
+                    let mut drag_value = |value: &mut u32, label: &str| {
+                        ui.label(label);
+                        let drag_value = egui::DragValue::new(value)
+                            .hexadecimal(8, true, false)
+                            .range(0xffff..=0xffffff)
+                            .clamp_to_range(true)
+                            .update_while_editing(false);
+                        ui.add(drag_value);
+                        ui.end_row();
+                    };
+                    drag_value(
+                        &mut self.config.restir.reservoir_hash_grid_capacity,
+                        "Reservoir hash grid capacity",
+                    );
+                    drag_value(
+                        &mut self.config.restir.update_hash_grid_capacity,
+                        "Update hash grid capacity",
+                    );
+                    ui.label("Grid cell scale");
+                    let drag_value = egui::DragValue::new(&mut self.config.restir.cell_scale)
+                        .range(0.1..=100.0)
+                        .clamp_to_range(true)
+                        .update_while_editing(false);
+                    ui.add(drag_value);
+                    ui.end_row();
+                });
+            });
+        });
     }
 }
 

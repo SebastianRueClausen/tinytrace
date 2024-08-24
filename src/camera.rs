@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec3};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
@@ -15,16 +15,16 @@ pub struct Camera {
 impl Camera {
     pub const UP: Vec3 = Vec3::Y;
 
-    pub fn new(surface_size: Vec2) -> Self {
+    pub fn new(aspect: f32) -> Self {
         Self {
             position: Vec3::ZERO,
             forward: Vec3::X,
             fov: std::f32::consts::FRAC_PI_2,
-            aspect: surface_size.x / surface_size.y,
             z_near: 0.1,
             z_far: 400.0,
             yaw: 0.0,
             pitch: 0.0,
+            aspect,
         }
     }
 

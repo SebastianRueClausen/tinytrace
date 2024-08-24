@@ -1,6 +1,9 @@
 #ifndef MATH
 #define MATH
 
+const float TAU = 6.283185307179586;
+const float PI = 3.1415926535897932;
+
 // An orthonormal basis.
 struct Basis {
     vec3 normal, tangent, bitangent;

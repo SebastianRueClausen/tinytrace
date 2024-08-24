@@ -254,16 +254,28 @@ LobeType importance_sample(
     out vec3 local_scatter, out vec3 local_half_vector, out float pdf
 ) {
     LobeType lobe_type = 0;
-    if (random_float(generator) > surface.metallic) {
+    if (constants.sample_strategy == UNIFORM_HEMISPHERE_SAMPLING) {
+        local_scatter = uniform_hemisphere_sample(generator);
+        local_half_vector = normalize(local_scatter + local_view);
+        lobe_type = DIFFUSE_LOBE;
+        pdf = 1.0 / PI;
+    } else if (constants.sample_strategy == COSINE_HEMISPHERE_SAMPLING) {
         local_scatter = cosine_hemisphere_sample(generator);
         local_half_vector = normalize(local_scatter + local_view);
         lobe_type = DIFFUSE_LOBE;
+        pdf = cosine_hemisphere_pdf(local_scatter.z);
     } else {
-        local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
-        lobe_type = SPECULAR_LOBE;
+        if (random_float(generator) > surface.metallic) {
+            local_scatter = cosine_hemisphere_sample(generator);
+            local_half_vector = normalize(local_scatter + local_view);
+            lobe_type = DIFFUSE_LOBE;
+        } else {
+            local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+            lobe_type = SPECULAR_LOBE;
+        }
+        pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
+            + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
     }
-    pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
-        + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
     return lobe_type;
 }
 
@@ -412,9 +424,13 @@ void main() {
 
     vec3 accumulated = vec3(0.0);
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
-        bool resample = sample_index % 2 == 1;
-        TracePathConfig trace_path_config =
-            TracePathConfig(constants.bounce_count, resample, !resample);
+        TracePathConfig trace_path_config;
+        if (constants.use_world_space_restir != 0) {
+            bool resample = sample_index % 2 == 1;
+            trace_path_config = TracePathConfig(constants.bounce_count, resample, !resample);
+        } else {
+            trace_path_config = TracePathConfig(constants.bounce_count, false, false);
+        }
         Generator path_generator =
             init_generator_from_pixel(pixel_index, constants.screen_size, generator.state);
 
@@ -430,7 +446,7 @@ void main() {
 
         accumulated += path_state.accumulated;
 
-        if (resample_state.is_found && length_squared(resample_state.accumulated) > 0.0) {
+        if (resample_state.is_found /* && length_squared(resample_state.accumulated) > 0.0 */) {
             // Create path.
             Path path;
             path.origin = resample_state.origin;

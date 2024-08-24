@@ -34,12 +34,20 @@ uint xor_shift(inout uint state) {
     return state;
 }
 
+uint mulberry32(inout uint state) {
+    state += 0x6D2B79F5;
+    uint z = state;
+    z = (z ^ z >> 15) * (1 | z);
+    z ^= z + (z ^ z >> 7) * (61 | z);
+    return z ^ z >> 14;
+}
+
 float random_float(inout Generator generator) {
-    return uint_to_unit_float(xor_shift(generator.state));
+    return uint_to_unit_float(mulberry32(generator.state));
 }
 
 uint random_uint(inout Generator generator, uint end) {
-    return xor_shift(generator.state) % end;
+    return mulberry32(generator.state) % end;
 }
 
 vec3 random_vec3(inout Generator generator) {

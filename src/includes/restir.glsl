@@ -63,10 +63,13 @@ bool reservoir_is_valid(in Reservoir reservoir) {
     return reservoir.weight_sum > 0.0;
 }
 
-void initialize_reservoir(out Reservoir reservoir) {
+Reservoir create_empty_reservoir() {
+    Reservoir reservoir;
     reservoir.weight_sum = 0.0;
     reservoir.weight = 0.0;
     reservoir.sample_count = 0;
+    reservoir.path.radiance = float[3](0.0, 0.0, 0.0);
+    return reservoir;
 }
 
 void update_reservoir(inout Reservoir reservoir, inout Generator generator, Path path, float weight) {
@@ -79,7 +82,7 @@ void update_reservoir(inout Reservoir reservoir, inout Generator generator, Path
 
 void update_reservoir_weight(inout Reservoir reservoir) {
     float target_function = path_target_function(reservoir.path);
-    if (target_function * reservoir.sample_count > 0) {
+    if (target_function > 0) {
         reservoir.weight = reservoir.weight_sum / (reservoir.sample_count * target_function);
     }
 }

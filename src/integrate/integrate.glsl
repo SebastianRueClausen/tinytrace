@@ -432,7 +432,7 @@ void main() {
             trace_path_config = TracePathConfig(constants.bounce_count, false, false);
         }
         Generator path_generator =
-            init_generator_from_pixel(pixel_index, constants.screen_size, generator.state);
+            init_generator_from_index(generator.state, sample_index);
 
         vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
@@ -446,8 +446,7 @@ void main() {
 
         accumulated += path_state.accumulated;
 
-        if (resample_state.is_found /* && length_squared(resample_state.accumulated) > 0.0 */) {
-            // Create path.
+        if (resample_state.is_found) {
             Path path;
             path.origin = resample_state.origin;
             path.destination = resample_state.destination;

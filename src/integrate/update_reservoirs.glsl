@@ -25,8 +25,7 @@ void main() {
         if (insert_reservoir_pool(constants.reservoir_hash_grid, key, reservoir_pool_index)) {
             float weight = reservoir_updates[update_index].weights[path_index];
             // Setup initial reservoir.
-            Reservoir reservoir;
-            initialize_reservoir(reservoir);
+            Reservoir reservoir = create_empty_reservoir();
             update_reservoir(reservoir, generator, path, weight);
 
             // Select random reservoir in pool to update.

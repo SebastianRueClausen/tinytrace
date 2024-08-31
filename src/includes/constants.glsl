@@ -12,6 +12,7 @@ struct Constants {
     uvec2 screen_size;
     uint use_world_space_restir, tonemap;
     SampleStrategy sample_strategy;
+    uint reservoir_updates_per_cell, reservoirs_per_cell;
 };
 
 #endif

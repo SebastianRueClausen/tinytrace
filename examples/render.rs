@@ -353,11 +353,10 @@ impl RendererController {
             checkbox(&mut self.config.restir.enabled, "Enable world space ReSTIR");
             ui.add_enabled_ui(self.config.restir.enabled, |ui| {
                 egui::Grid::new("restir").show(ui, |ui| {
-                    let mut drag_value = |value: &mut u32, label: &str| {
+                    let mut drag_value = |value: &mut u32, label: &str, range| {
                         ui.label(label);
                         let drag_value = egui::DragValue::new(value)
-                            .hexadecimal(8, true, false)
-                            .range(0xffff..=0xffffff)
+                            .range(range)
                             .clamp_to_range(true)
                             .update_while_editing(false);
                         ui.add(drag_value);
@@ -366,13 +365,25 @@ impl RendererController {
                     drag_value(
                         &mut self.config.restir.reservoir_hash_grid_capacity,
                         "Reservoir hash grid capacity",
+                        0xffff..=0xffffff,
                     );
                     drag_value(
                         &mut self.config.restir.update_hash_grid_capacity,
                         "Update hash grid capacity",
+                        0xffff..=0xffffff,
                     );
-                    ui.label("Grid cell scale");
-                    let drag_value = egui::DragValue::new(&mut self.config.restir.cell_scale)
+                    drag_value(
+                        &mut self.config.restir.reservoirs_per_cell,
+                        "Reservoirs per cell",
+                        1..=128,
+                    );
+                    drag_value(
+                        &mut self.config.restir.updates_per_cell,
+                        "Reservoir upgrades per cell",
+                        1..=128,
+                    );
+                    ui.label("Scene scale");
+                    let drag_value = egui::DragValue::new(&mut self.config.restir.scene_scale)
                         .range(0.1..=100.0)
                         .clamp_to_range(true)
                         .update_while_editing(false);

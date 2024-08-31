@@ -48,14 +48,6 @@ struct Reservoir {
 };
 
 const uint RESERVOIR_MAX_SAMPLE_COUNT = 30;
-const uint RESERVOIR_UPDATE_COUNT = 64;
-
-// 836 bytes.
-struct ReservoirUpdate {
-    Path paths[RESERVOIR_UPDATE_COUNT];
-    float weights[RESERVOIR_UPDATE_COUNT];
-    uint update_count;
-};
 
 bool reservoir_is_valid(in Reservoir reservoir) {
     // The reservoir must have a valid sample if the weight sum isn't 0 as it only selects a sample
@@ -82,7 +74,7 @@ void update_reservoir(inout Reservoir reservoir, inout Generator generator, Path
 
 void update_reservoir_weight(inout Reservoir reservoir) {
     float target_function = path_target_function(reservoir.path);
-    if (target_function > 0) {
+    if (target_function > 0.0) {
         reservoir.weight = reservoir.weight_sum / (reservoir.sample_count * target_function);
     }
 }
@@ -91,20 +83,6 @@ void merge_reservoirs(inout Reservoir reservoir, inout Generator generator, Rese
     float target_function = path_target_function(other.path);
     update_reservoir(reservoir, generator, other.path, target_function * other.weight * other.sample_count);
     reservoir.sample_count += other.sample_count;
-}
-
-const uint RESERVOIR_POOL_SIZE = 4;
-
-struct ReservoirPool {
-    Reservoir reservoirs[RESERVOIR_POOL_SIZE];
-};
-
-Reservoir determine_reservoir_from_pool(in ReservoirPool pool, inout Generator generator) {
-    Reservoir reservoir = pool.reservoirs[0];
-    for (uint index = 1; index < RESERVOIR_POOL_SIZE; index++) {
-        merge_reservoirs(reservoir, generator, pool.reservoirs[index]);
-    }
-    return reservoir;
 }
 
 float path_jacobian(vec3 sample_position, Path path) {

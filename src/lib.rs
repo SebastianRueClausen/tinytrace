@@ -6,12 +6,14 @@ mod test;
 pub mod asset;
 pub mod backend;
 pub mod camera;
+pub mod config;
 pub mod error;
+mod hash_grid;
 mod integrate;
 mod post_process;
 pub mod scene;
 
-use std::{fmt, mem};
+use std::mem;
 
 use ash::vk;
 use backend::{
@@ -19,9 +21,11 @@ use backend::{
     ImageRequest, Lifetime, MemoryLocation,
 };
 use camera::Camera;
+pub use config::{Config, RestirConfig, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
-use integrate::{HashGridLayout, Integrator};
+use hash_grid::HashGridLayout;
+use integrate::Integrator;
 use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use scene::Scene;
@@ -132,13 +136,15 @@ impl Renderer {
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
-            reservoir_hash_grid: self.integrator.reservoir_pools.layout,
-            reservoir_update_hash_grid: self.integrator.reservoir_updates.layout,
+            reservoir_hash_grid: self.integrator.restir_state.reservoir_hash_grid.layout,
+            reservoir_update_hash_grid: self.integrator.restir_state.update_hash_grid.layout,
             use_world_space_restir: self.config.restir.enabled.into(),
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             tonemap: self.config.tonemap.into(),
             sample_strategy: self.config.sample_strategy,
+            reservoirs_per_cell: self.config.restir.reservoirs_per_cell,
+            reservoir_updates_per_cell: self.config.restir.updates_per_cell,
             proj_view,
             view,
             proj,
@@ -231,80 +237,9 @@ struct Constants {
     use_world_space_restir: u32,
     tonemap: u32,
     sample_strategy: SampleStrategy,
-    padding: [u32; 3],
-}
-
-#[repr(u32)]
-#[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum SampleStrategy {
-    UniformHemisphere = 1,
-    CosineHemisphere = 2,
-    #[default]
-    Brdf = 3,
-}
-
-impl fmt::Display for SampleStrategy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UniformHemisphere => write!(f, "Uniform Hemisphere"),
-            Self::CosineHemisphere => write!(f, "Cosine Hemisphere"),
-            Self::Brdf => write!(f, "BRDF"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct RestirConfig {
-    pub enabled: bool,
-    pub cell_scale: f32,
-    pub update_hash_grid_capacity: u32,
-    pub reservoir_hash_grid_capacity: u32,
-}
-
-impl PartialEq for RestirConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.enabled == other.enabled
-            && self.update_hash_grid_capacity == other.update_hash_grid_capacity
-            && self.reservoir_hash_grid_capacity == other.reservoir_hash_grid_capacity
-            && (self.cell_scale - other.cell_scale).abs() < 1e-4
-    }
-}
-
-impl Eq for RestirConfig {}
-
-impl Default for RestirConfig {
-    fn default() -> Self {
-        Self {
-            update_hash_grid_capacity: 0xffff,
-            reservoir_hash_grid_capacity: 0xfffff,
-            enabled: true,
-            cell_scale: 10.0,
-        }
-    }
-}
-
-/// Configuration of the renderer.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct Config {
-    /// The number of ray bounces.
-    pub bounce_count: u32,
-    /// The number of samples per pixel.
-    pub sample_count: u32,
-    pub tonemap: bool,
-    pub sample_strategy: SampleStrategy,
-    pub restir: RestirConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            restir: RestirConfig::default(),
-            sample_strategy: SampleStrategy::default(),
-            tonemap: true,
-            bounce_count: 6,
-            sample_count: 2,
-        }
-    }
+    reservoir_updates_per_cell: u32,
+    reservoirs_per_cell: u32,
+    padding: [u32; 1],
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

@@ -130,19 +130,6 @@ impl RestirState {
             .bind_buffer("reservoirs", &self.reservoirs)
             .bind_buffer("reservoir_updates", &self.updates)
             .dispatch(self.update_hash_grid.layout.capacity, 1)?;
-        /*
-        if context.frame_index() > 1500 {
-            let download = context.download(&[self.updates.clone()], &[])?;
-            let bytes = &download.buffers[&self.updates];
-            let counts: &[Reservoir] = bytemuck::cast_slice(bytes);
-            counts
-                .iter()
-                .filter(|reservoir| reservoir.sample_count > 0)
-                .for_each(|reservoir| println!("{reservoir:?}"));
-            // panic!("{:?}", &counts[..1024]);
-            panic!();
-        }
-        */
         Ok(())
     }
 

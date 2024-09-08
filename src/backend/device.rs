@@ -9,6 +9,7 @@ pub struct Device {
     pub device: ash::Device,
     pub physical_device: vk::PhysicalDevice,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub properties: vk::PhysicalDeviceProperties,
     pub queue_family_index: u32,
     pub queue: vk::Queue,
     pub descriptor_buffer: ext::descriptor_buffer::Device,
@@ -29,6 +30,7 @@ impl Device {
         let (physical_device, queue_family_index) = select_physical_device(instance)?;
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
         let queue_info = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index)
             .queue_priorities(&[1.0]);
@@ -43,6 +45,7 @@ impl Device {
             .uniform_and_storage_buffer16_bit_access(true);
         let mut vulkan_1_2_features = vk::PhysicalDeviceVulkan12Features::default()
             .buffer_device_address(true)
+            .host_query_reset(true)
             .descriptor_binding_variable_descriptor_count(true)
             .runtime_descriptor_array(true)
             .shader_float16(true)
@@ -82,6 +85,7 @@ impl Device {
             acceleration_structure: khr::acceleration_structure::Device::new(instance, &device),
             descriptor_buffer: ext::descriptor_buffer::Device::new(instance, &device),
             descriptor_buffer_properties,
+            properties,
             queue_family_index,
             memory_properties,
             physical_device,

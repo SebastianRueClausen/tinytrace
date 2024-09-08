@@ -23,12 +23,14 @@ pub mod resource;
 mod shader;
 mod surface;
 mod sync;
+pub mod timing;
 
 #[cfg(test)]
 mod test;
 
 use std::collections::HashMap;
 use std::slice;
+use std::time::Duration;
 
 use self::sync::Sync;
 use self::{surface::Swapchain, sync::Access};
@@ -130,6 +132,7 @@ pub struct Context {
     acquired_swapchain_image: Option<Handle<Image>>,
     /// Map from path to source of shader includes.
     includes: HashMap<&'static str, String>,
+    timestamps: HashMap<String, Duration>,
     sync: Sync,
 }
 
@@ -186,6 +189,7 @@ impl Context {
         let mut context = Self {
             sync: Sync::new(&device, FRAMES_IN_FLIGHT)?,
             includes: HashMap::default(),
+            timestamps: HashMap::default(),
             acquired_swapchain_image: None,
             command_buffers,
             bound_shader: None,
@@ -211,7 +215,8 @@ impl Context {
     fn begin_next_command_buffer(&mut self) -> Result<(), Error> {
         self.command_buffers.rotate_right(1);
         let buffer = self.command_buffers.first_mut().unwrap();
-        buffer.clear(&self.sync, &self.device)?;
+        self.timestamps
+            .extend(buffer.clear(&self.sync, &self.device)?);
         buffer.begin(&self.device)
     }
 
@@ -224,14 +229,19 @@ impl Context {
     }
 
     /// Advance `lifetime`. This destroys all resources with `lifetime` and
-    /// invalidates their handles.
-    pub fn advance_lifetime(&mut self, lifetime: Lifetime) -> Result<(), Error> {
+    /// invalidates their handles. Returns the timestamp when all pending commands have been
+    /// executed.
+    fn advance_lifetime(&mut self, lifetime: Lifetime, present: bool) -> Result<u64, Error> {
         // TODO: Maybe check if commands have been recorded before doing this.
-        self.execute_commands(false)?;
+        let timestamp = self.execute_commands(present)?;
         if let Some(pool) = self.pools.get_mut(&lifetime) {
             pool.clear(&self.sync, &self.device)?;
         }
-        Ok(())
+        Ok(timestamp)
+    }
+
+    pub fn clear_resources_with_lifetime(&mut self, lifetime: Lifetime) -> Result<(), Error> {
+        self.advance_lifetime(lifetime, false).map(|_| ())
     }
 }
 
@@ -280,6 +290,19 @@ impl Context {
     /// Add shader include. This allows shaders to include this using `path`.
     pub fn add_include(&mut self, path: &'static str, source: String) {
         self.includes.insert(path, source);
+    }
+
+    pub fn timestamp(&self, name: &str) -> Option<Duration> {
+        self.timestamps.get(name).copied()
+    }
+
+    pub fn wait_until_idle(&mut self) -> Result<(), Error> {
+        self.execute_commands(false)?;
+        for command_buffer in self.command_buffers[1..].iter_mut().rev() {
+            self.timestamps
+                .extend(command_buffer.clear(&self.sync, &self.device)?);
+        }
+        Ok(())
     }
 
     pub fn create_sampler(
@@ -376,8 +399,7 @@ impl Context {
                 access: vk::AccessFlags2::empty(),
             };
             self.access_resources(&[(image.clone(), access)], &[], &[], &[])?;
-            // Execute all pending commands.
-            let timestamp = self.execute_commands(true)?;
+            let timestamp = self.advance_lifetime(Lifetime::Frame, true)?;
             let image_index = self.image(&image).swapchain_index.unwrap();
             let (swapchain, _) = self.swapchain();
             let present_result =

@@ -107,7 +107,7 @@ impl Context {
         }
     }
 
-    pub fn access_resources(
+    pub(super) fn access_resources(
         &mut self,
         images: &[(Handle<Image>, Access)],
         buffers: &[(Handle<Buffer>, Access)],

@@ -4,11 +4,12 @@ use std::{mem, thread};
 
 use ash::vk;
 use bit_set::BitSet;
+use egui::RichText;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
 use tinytrace::error::ErrorKind;
-use tinytrace::{asset, backend, Renderer, SampleStrategy};
+use tinytrace::{asset, backend, Renderer, SampleStrategy, Timings};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -180,6 +181,9 @@ impl RenderState {
                                 .unwrap();
                         }
                     });
+                    if let Some(timings) = self.renderer.timings() {
+                        timings_gui(&timings, ui);
+                    }
                 });
         })
     }
@@ -232,6 +236,21 @@ impl Gui {
             egui_context,
         })
     }
+}
+
+fn timings_gui(timings: &Timings, ui: &mut egui::Ui) {
+    egui::Grid::new("timings").show(ui, |ui| {
+        ui.label(RichText::new("Stage").strong());
+        ui.label(RichText::new("Duration").strong());
+        ui.end_row();
+        let mut timing = |label, duration: Duration| {
+            ui.label(label);
+            ui.label(format!("{:?}", duration));
+            ui.end_row();
+        };
+        timing("Integrate", timings.integrate);
+        timing("Post Process", timings.post_process);
+    });
 }
 
 #[derive(Default)]

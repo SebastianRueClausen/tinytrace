@@ -276,7 +276,7 @@ impl Context {
                 (buffer.clone(), data)
             })
             .collect();
-        self.advance_lifetime(Lifetime::Frame)?;
+        self.clear_resources_with_lifetime(Lifetime::Frame)?;
         Ok(Download { buffers, images })
     }
 }

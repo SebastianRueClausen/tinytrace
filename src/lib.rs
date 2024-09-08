@@ -13,7 +13,7 @@ mod integrate;
 mod post_process;
 pub mod scene;
 
-use std::mem;
+use std::{mem, time::Duration};
 
 use ash::vk;
 use backend::{
@@ -80,13 +80,12 @@ impl Renderer {
         } else {
             None
         };
-        let scene = Scene::new(&mut context, &scene)?;
         Ok(Self {
             camera: Camera::new(extent.width as f32 / extent.height as f32),
+            scene: Scene::new(&mut context, &scene)?,
             accumulated_frame_count: 0,
             config,
             context,
-            scene,
             render_target,
             integrator,
             post_process,
@@ -96,7 +95,8 @@ impl Renderer {
     }
 
     pub fn set_scene(&mut self, scene: &asset::Scene) -> Result<(), Error> {
-        self.context.advance_lifetime(Lifetime::Scene)?;
+        self.context
+            .clear_resources_with_lifetime(Lifetime::Scene)?;
         self.scene = Scene::new(&mut self.context, scene)?;
         Ok(())
     }
@@ -109,7 +109,8 @@ impl Renderer {
         if self.config != config {
             self.reset_accumulation();
             if self.config.restir != config.restir {
-                self.context.advance_lifetime(Lifetime::Renderer)?;
+                self.context
+                    .clear_resources_with_lifetime(Lifetime::Renderer)?;
                 self.integrator = Integrator::new(&mut self.context, &config.restir)?;
             }
         }
@@ -156,6 +157,7 @@ impl Renderer {
             data: bytemuck::bytes_of(&constants).into(),
         }])?;
 
+        self.context.insert_timestamp("before integrate");
         self.integrator.integrate(
             &mut self.context,
             &self.constants,
@@ -163,6 +165,7 @@ impl Renderer {
             &self.render_target,
         )?;
 
+        self.context.insert_timestamp("after integrate");
         self.accumulated_frame_count += 1;
 
         Ok(())
@@ -172,18 +175,29 @@ impl Renderer {
         self.accumulated_frame_count = 0;
     }
 
+    pub fn timings(&mut self) -> Option<Timings> {
+        Some(Timings {
+            integrate: self.context.timestamp("after integrate")?
+                - self.context.timestamp("before integrate")?,
+            post_process: self.context.timestamp("after post process")?
+                - self.context.timestamp("before post process")?,
+        })
+    }
+
     pub fn prepare_to_present(&mut self) -> Result<Handle<Image>, Error> {
         let swapchain_image = self.context.swapchain_image()?;
         let post_process = self
             .post_process
             .as_mut()
             .expect("renderer doesn't have a surface");
+        self.context.insert_timestamp("before post process");
         post_process.run(
             &mut self.context,
             &self.constants,
             &self.render_target,
             &swapchain_image,
         )?;
+        self.context.insert_timestamp("after post process");
         Ok(swapchain_image)
     }
 
@@ -216,6 +230,12 @@ fn create_render_target(
             },
         },
     )
+}
+
+#[derive(Debug)]
+pub struct Timings {
+    pub integrate: Duration,
+    pub post_process: Duration,
 }
 
 #[repr(C)]

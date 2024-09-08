@@ -1,5 +1,6 @@
 mod copy;
 mod shader;
+mod timing;
 
 use crate::backend::*;
 

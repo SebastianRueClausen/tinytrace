@@ -85,8 +85,8 @@ impl Default for Config {
             restir: RestirConfig::default(),
             sample_strategy: SampleStrategy::default(),
             tonemap: true,
-            bounce_count: 6,
-            sample_count: 2,
+            bounce_count: 4,
+            sample_count: 1,
         }
     }
 }

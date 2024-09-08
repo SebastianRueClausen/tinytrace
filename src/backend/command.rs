@@ -1,17 +1,20 @@
+use std::time::Duration;
+
 use ash::vk;
 
 use super::{
-    device::Device, shader::DescriptorBuffer, sync::Sync, Allocator, Buffer, BufferRequest,
-    BufferType, Error, MemoryLocation,
+    device::Device, shader::DescriptorBuffer, sync::Sync, timing::QueryPool, Allocator, Buffer,
+    BufferRequest, BufferType, Error, MemoryLocation,
 };
 
 #[derive(Debug)]
 pub struct CommandBuffer {
-    pub pool: vk::CommandPool,
-    pub buffer: vk::CommandBuffer,
-    pub descriptor_buffer: DescriptorBuffer,
+    pub(super) pool: vk::CommandPool,
+    pub(super) buffer: vk::CommandBuffer,
+    pub(super) descriptor_buffer: DescriptorBuffer,
+    pub(super) query_pool: QueryPool,
     /// The timestamp signaled when all commands have executed.
-    pub timestamp: u64,
+    pub(super) timestamp: u64,
 }
 
 impl CommandBuffer {
@@ -32,14 +35,14 @@ impl CommandBuffer {
             memory_location: MemoryLocation::Host,
         };
         let buffer = Buffer::new(device, allocator, &request)?;
-        let descriptor_buffer = DescriptorBuffer {
-            data: allocator.map(device, buffer.memory_index)?,
-            size: request.size as usize,
-            bound_range: Default::default(),
-            buffer,
-        };
         Ok(Self {
-            descriptor_buffer,
+            query_pool: QueryPool::new(device)?,
+            descriptor_buffer: DescriptorBuffer {
+                data: allocator.map(device, buffer.memory_index)?,
+                size: request.size as usize,
+                bound_range: Default::default(),
+                buffer,
+            },
             buffer: buffers[0],
             timestamp: 0,
             pool,
@@ -59,6 +62,8 @@ impl CommandBuffer {
             device
                 .descriptor_buffer
                 .cmd_bind_descriptor_buffers(self.buffer, &binding_infos);
+            let query_count = QueryPool::QUERY_COUNT;
+            device.cmd_reset_query_pool(self.buffer, self.query_pool.pool, 0, query_count)
         }
         Ok(())
     }
@@ -69,19 +74,31 @@ impl CommandBuffer {
         unsafe { device.end_command_buffer(self.buffer).map_err(Error::from) }
     }
 
-    pub fn clear(&self, semaphores: &Sync, device: &Device) -> Result<(), Error> {
-        semaphores.wait_for_timestamp(device, self.timestamp)?;
+    pub fn add_timestamp(&mut self, device: &Device, name: String) {
+        let index = self.query_pool.add_timestamp(name);
+        let stage = vk::PipelineStageFlags2::ALL_COMMANDS;
+        unsafe { device.cmd_write_timestamp2(self.buffer, stage, self.query_pool.pool, index) }
+    }
+
+    pub fn clear(
+        &mut self,
+        sync: &Sync,
+        device: &Device,
+    ) -> Result<Vec<(String, Duration)>, Error> {
+        sync.wait_for_timestamp(device, self.timestamp)?;
         unsafe {
             let flags = vk::CommandPoolResetFlags::RELEASE_RESOURCES;
             device
                 .reset_command_pool(self.pool, flags)
-                .map_err(Error::from)
+                .map_err(Error::from)?;
         }
+        self.query_pool.get_queries(device)
     }
 
     pub fn destroy(&self, device: &Device) {
         unsafe {
             self.descriptor_buffer.buffer.destroy(device);
+            self.query_pool.destroy(device);
             device.destroy_command_pool(self.pool, None);
         }
     }

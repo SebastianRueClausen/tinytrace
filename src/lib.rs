@@ -21,7 +21,7 @@ use backend::{
     ImageRequest, Lifetime, MemoryLocation,
 };
 use camera::Camera;
-pub use config::{Config, RestirConfig, SampleStrategy};
+pub use config::{Config, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
 use hash_grid::HashGridLayout;
@@ -146,10 +146,10 @@ impl Renderer {
             sample_strategy: self.config.sample_strategy,
             reservoirs_per_cell: self.config.restir.reservoirs_per_cell,
             reservoir_updates_per_cell: self.config.restir.updates_per_cell,
+            restir_replay: self.config.restir.replay,
             proj_view,
             view,
             proj,
-            ..Default::default()
         };
 
         self.context.write_buffers(&[BufferWrite {
@@ -259,7 +259,7 @@ struct Constants {
     sample_strategy: SampleStrategy,
     reservoir_updates_per_cell: u32,
     reservoirs_per_cell: u32,
-    padding: [u32; 1],
+    restir_replay: RestirReplay,
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

@@ -9,7 +9,7 @@ use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
 use tinytrace::error::ErrorKind;
-use tinytrace::{asset, backend, Renderer, SampleStrategy, Timings};
+use tinytrace::{asset, backend, Renderer, RestirReplay, SampleStrategy, Timings};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -384,22 +384,22 @@ impl RendererController {
                     drag_value(
                         &mut self.config.restir.reservoir_hash_grid_capacity,
                         "Reservoir hash grid capacity",
-                        0xffff..=0xffffff,
+                        0xfff..=0xffffff,
                     );
                     drag_value(
                         &mut self.config.restir.update_hash_grid_capacity,
                         "Update hash grid capacity",
-                        0xffff..=0xffffff,
+                        0xfff..=0xffffff,
                     );
                     drag_value(
                         &mut self.config.restir.reservoirs_per_cell,
                         "Reservoirs per cell",
-                        1..=128,
+                        1..=256,
                     );
                     drag_value(
                         &mut self.config.restir.updates_per_cell,
-                        "Reservoir upgrades per cell",
-                        1..=128,
+                        "Reservoir updates per cell",
+                        1..=256,
                     );
                     ui.label("Scene scale");
                     let drag_value = egui::DragValue::new(&mut self.config.restir.scene_scale)
@@ -407,6 +407,21 @@ impl RendererController {
                         .clamp_to_range(true)
                         .update_while_editing(false);
                     ui.add(drag_value);
+                    ui.end_row();
+                    egui::ComboBox::from_label("Replay")
+                        .selected_text(format!("{}", self.config.restir.replay))
+                        .show_ui(ui, |ui| {
+                            let mut option = |value| {
+                                ui.selectable_value(
+                                    &mut self.config.restir.replay,
+                                    value,
+                                    format!("{value}"),
+                                );
+                            };
+                            option(RestirReplay::None);
+                            option(RestirReplay::First);
+                            option(RestirReplay::Full);
+                        });
                     ui.end_row();
                 });
             });

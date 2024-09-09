@@ -24,9 +24,9 @@ struct HashGrid {
     uint capacity, bucket_size, padding;
 };
 
-GridCell hash_grid_cell(vec3 position, vec3 camera_position, vec3 offset, in HashGrid hash_grid) {
+GridCell hash_grid_cell(vec3 position, vec3 camera_position, vec3 offset, float level_offset, in HashGrid hash_grid) {
     float distance_squared = dot(camera_position - position, camera_position - position);
-    uint grid_level = uint(clamp(0.5 * log2(distance_squared) + LEVEL_BIAS, 1.0, float(LEVEL_BIT_MASK)));
+    uint grid_level = uint(clamp(0.5 * log2(distance_squared) + LEVEL_BIAS + level_offset, 1.0, float(LEVEL_BIT_MASK)));
     float voxel_size = pow(2.0, grid_level) / (hash_grid.scene_scale * pow(2.0, LEVEL_BIAS));
     ivec3 grid_position = ivec3(floor((position + vec3(POSITION_BIAS)) / voxel_size + offset));
     return GridCell(grid_position, grid_level);

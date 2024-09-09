@@ -47,7 +47,7 @@ struct Reservoir {
     uint sample_count;
 };
 
-const uint RESERVOIR_MAX_SAMPLE_COUNT = 30;
+const uint RESERVOIR_MAX_SAMPLE_COUNT = 512;
 
 bool reservoir_is_valid(in Reservoir reservoir) {
     // The reservoir must have a valid sample if the weight sum isn't 0 as it only selects a sample
@@ -101,14 +101,15 @@ float path_jacobian(vec3 sample_position, Path path) {
     return div > 0.0 ? sample_cos_phi * pow2(path_distance) / div : 0.0;
 }
 
-const float PATH_RECONNECT_DISTANCE_THRESHOLD = 0.1;
-const float PATH_RECONNECT_COS_THETA_THRESHOLD = 0.906;
-
 bool can_reconnect_to_path(vec3 sample_position, vec3 sample_normal, Path path) {
-    float distance = length(sample_position - bounce_surface_position(path.origin));
+    float reconnection_distance = length(sample_position - bounce_surface_position(path.destination));
     float cos_theta = dot(sample_normal, bounce_surface_normal(path.origin));
-    return distance < PATH_RECONNECT_DISTANCE_THRESHOLD
-        && cos_theta > PATH_RECONNECT_COS_THETA_THRESHOLD;
+    return reconnection_distance > 0.2 && cos_theta > 0.906;
 }
+
+#define RestirReplay uint
+const RestirReplay REPLAY_NONE = 1;
+const RestirReplay REPLAY_FIRST = 2;
+const RestirReplay REPLAY_FULL = 3;
 
 #endif

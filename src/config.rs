@@ -30,6 +30,21 @@ impl fmt::Display for SampleStrategy {
     }
 }
 
+#[repr(u32)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RestirReplay {
+    None = 1,
+    #[default]
+    First = 2,
+    Full = 3,
+}
+
+impl fmt::Display for RestirReplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 /// Configuration for the world space ReSTIR system.
 #[derive(Debug, Clone, Copy)]
 pub struct RestirConfig {
@@ -39,6 +54,7 @@ pub struct RestirConfig {
     pub reservoir_hash_grid_capacity: u32,
     pub updates_per_cell: u32,
     pub reservoirs_per_cell: u32,
+    pub replay: RestirReplay,
 }
 
 impl PartialEq for RestirConfig {
@@ -48,6 +64,7 @@ impl PartialEq for RestirConfig {
             && self.reservoir_hash_grid_capacity == other.reservoir_hash_grid_capacity
             && self.updates_per_cell == other.updates_per_cell
             && self.reservoirs_per_cell == other.reservoirs_per_cell
+            && self.replay == other.replay
             && (self.scene_scale - other.scene_scale).abs() < 1e-4
     }
 }
@@ -57,10 +74,11 @@ impl Eq for RestirConfig {}
 impl Default for RestirConfig {
     fn default() -> Self {
         Self {
+            replay: RestirReplay::default(),
             update_hash_grid_capacity: 0xffff,
-            reservoir_hash_grid_capacity: 0xfffff,
+            reservoir_hash_grid_capacity: 0xffff,
             updates_per_cell: 128,
-            reservoirs_per_cell: 8,
+            reservoirs_per_cell: 64,
             enabled: true,
             scene_scale: 10.0,
         }

@@ -182,19 +182,14 @@ vec3 normal_bias(vec3 position, vec3 normal) {
 
 Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
     uint base_index = constants.reservoirs_per_cell * cell_index;
-    Reservoir reservoir = reservoirs[base_index];
-    for (uint index = 1; index < constants.reservoirs_per_cell; index++) {
-        merge_reservoirs(reservoir, generator, reservoirs[base_index + index]);
-    }
-    return reservoir;
+    uint reservoir_index = random_uint(generator, constants.reservoirs_per_cell);
+    return reservoirs[base_index + reservoir_index];
 }
 
 uint64_t get_reservoir_key(vec3 position, vec3 normal) {
     return hash_grid_key(hash_grid_cell(
-        normal_bias(position, normal),
-        constants.camera_position.xyz,
-        vec3(0.0),
-        constants.reservoir_hash_grid
+        normal_bias(position, normal), constants.camera_position.xyz,
+        vec3(0.0), 0.0, constants.reservoir_hash_grid
     ));
 }
 
@@ -265,6 +260,18 @@ ResampleState create_resample_state() {
     return resample_state;
 }
 
+struct ReplayPath {
+    BounceSurface reconnect_location;
+    vec3 radiance;
+    bool is_found;
+};
+
+ReplayPath create_replay_path() {
+    ReplayPath replay_path;
+    replay_path.is_found = false;
+    return replay_path;
+}
+
 struct PathState {
     vec3 accumulated, attenuation;
     // The two generators. `generator` is used to everything that doens't change the path.
@@ -278,13 +285,14 @@ struct PathState {
     float mip_level;
     // The next ray to be traced.
     Ray ray;
+    ReplayPath replay_path;
 };
 
 PathState create_path_state(Generator generator, Generator path_generator, vec2 ndc, Ray ray) {
-    return PathState(vec3(0.0), vec3(1.0), generator, path_generator, ndc, 1.0, ray);
+    return PathState(vec3(0.0), vec3(1.0), generator, path_generator, ndc, 1.0, ray, create_replay_path());
 }
 
-LobeType importance_sample(
+LobeType sample_scatter_direction(
     in SurfaceProperties surface, inout Generator generator, vec3 local_view,
     out vec3 local_scatter, out vec3 local_half_vector, out float pdf
 ) {
@@ -322,7 +330,22 @@ bool next_path_segment(
 ) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
+        vec3 sky_color = vec3(0.0);
+        path_state.accumulated += sky_color * path_state.attenuation;
+        if (resample_state.is_found) {
+            resample_state.accumulated += sky_color * resample_state.attenuation;
+        }
         return false;
+    }
+
+    if (constants.restir_replay == REPLAY_FIRST && path_state.replay_path.is_found) {
+        if (length(bounce_surface_position(path_state.replay_path.reconnect_location) - hit.world_position) < 0.01) {
+            path_state.accumulated += path_state.attenuation * path_state.replay_path.radiance;
+            return false;
+        } else {
+            path_state.replay_path.is_found = false;
+            // Continuing here may not be correct.
+        }
     }
 
     Instance instance = instances[hit.instance];
@@ -359,18 +382,15 @@ bool next_path_segment(
     // litterature.
     vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
 
-
     float pdf = 0.0;
     vec3 local_scatter, local_half_vector;
-    vec3 resample_radiance = vec3(0.0);
 
-    if (config.resample_path && bounce != 0) {
-        config.resample_path = false;
+    if (config.resample_path && !path_state.replay_path.is_found) {
         uint64_t key = hash_grid_key(hash_grid_cell(
             normal_bias(hit.world_position, surface_basis.normal),
             constants.camera_position.xyz,
-            // random_vec3(path_state.generator) * 2.0 - 1.0,
-            vec3(0.0),
+            random_vec3(path_state.generator) * 2.0 - 1.0,
+            random_float(path_state.generator) * 0.5 - 0.25,
             constants.reservoir_hash_grid
         ));
         uint reservoir_cell_index;
@@ -387,7 +407,10 @@ bool next_path_segment(
                 local_half_vector = normalize(local_scatter + local_view);
                 float jacobian = path_jacobian(hit.world_position, reservoir.path);
                 pdf = 1.0 / reservoir.weight * clamp(jacobian, 0.00001, 1000.0);
-                resample_radiance = vec3(reservoir.path.radiance[0], reservoir.path.radiance[1], reservoir.path.radiance[2]);
+                path_state.replay_path.radiance =
+                    vec3(reservoir.path.radiance[0], reservoir.path.radiance[1], reservoir.path.radiance[2]);
+                path_state.replay_path.reconnect_location = reservoir.path.destination;
+                path_state.replay_path.is_found = true;
             }
         }
     }
@@ -395,7 +418,7 @@ bool next_path_segment(
     Generator before_sample_generator = path_state.path_generator;
     LobeType lobe_type = 0;
     if (pdf == 0.0) {
-        lobe_type = importance_sample(
+        lobe_type = sample_scatter_direction(
             surface, path_state.path_generator, local_view,
             local_scatter, local_half_vector, pdf
         );
@@ -404,6 +427,8 @@ bool next_path_segment(
     bool can_form_resample_path = config.find_resample_path
         // Only find a simple resample path per trace for now
         && !resample_state.is_found
+        // Don't resample if a path is being replayed.
+        && !path_state.replay_path.is_found
         // It isn't possible to reconnect the first bounce.
         && bounce != 0
         // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
@@ -412,7 +437,9 @@ bool next_path_segment(
         // The current bounce must be diffuse meaning that it samples the diffuse lope. This
         // is required to create a successfull reconnecting because diffuse sampling doesn't
         // depend on the incidence vector, which will be different because of the reconnection.
-        && lobe_type == DIFFUSE_LOBE;
+        && lobe_type == DIFFUSE_LOBE
+        // Very short reconnection paths can cause a bunch of problems.
+        && length(hit.world_position - path_state.ray.origin) > 0.05;
     if (can_form_resample_path) {
         resample_state.origin = create_bounce_surface(path_state.ray.origin, resample_state.previous_normal);
         resample_state.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
@@ -439,13 +466,13 @@ bool next_path_segment(
     // not algebraic).
     vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
 
-    if (length(resample_radiance) > 0.0) {
-        path_state.accumulated = emissive * path_state.attenuation;
-        path_state.accumulated = attenuation_factor * path_state.attenuation * resample_radiance;
+    path_state.accumulated += emissive * path_state.attenuation;
+
+    if (constants.restir_replay == REPLAY_NONE && path_state.replay_path.is_found) {
+        path_state.accumulated += attenuation_factor * path_state.attenuation * path_state.replay_path.radiance;
         return false;
     }
 
-    path_state.accumulated += emissive * path_state.attenuation;
     path_state.attenuation *= attenuation_factor;
     if (resample_state.is_found) {
         resample_state.accumulated += emissive * resample_state.attenuation;
@@ -472,8 +499,8 @@ void main() {
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
         TracePathConfig trace_path_config;
         if (constants.use_world_space_restir != 0) {
-            bool resample = sample_index % 2 == 1;
-            trace_path_config = TracePathConfig(constants.bounce_count, resample, !resample);
+            bool resample_path = random_float(generator) > 0.75;
+            trace_path_config = TracePathConfig(constants.bounce_count, true, resample_path);
         } else {
             trace_path_config = TracePathConfig(constants.bounce_count, false, false);
         }
@@ -507,7 +534,7 @@ void main() {
 
                 // Insert as a reservoir update.
                 uint64_t key = hash_grid_key(hash_grid_cell(
-                    position, constants.camera_position.xyz, vec3(0.0), constants.reservoir_update_hash_grid
+                    position, constants.camera_position.xyz, vec3(0.0), 0.0, constants.reservoir_update_hash_grid
                 ));
                 uint slot = hash_grid_hash(key) % constants.reservoir_update_hash_grid.capacity;
                 uint update_index = atomicAdd(reservoir_update_counts[slot], 1);

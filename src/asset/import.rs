@@ -269,11 +269,20 @@ fn load_mesh(
                 .map(|value| normal::quantize_snorm(value, 16) as i16)
         }),
     );
+    let (vertex_count, index_count) = (vertices.len() as u32, indices.len() as u32);
+    let vertex_offset = extend_vec(&mut scene.vertices, vertices) as u32;
+    let index_offset = extend_vec(&mut scene.indices, indices) as u32;
     Ok(Mesh {
-        vertex_count: vertices.len() as u32,
-        index_count: indices.len() as u32,
-        vertex_offset: extend_vec(&mut scene.vertices, vertices) as u32,
-        index_offset: extend_vec(&mut scene.indices, indices) as u32,
+        emissive_triangles: find_emissive_triangles(
+            material,
+            index_offset,
+            index_count,
+            &scene.materials,
+        ),
+        vertex_count,
+        index_count,
+        vertex_offset,
+        index_offset,
         bounding_sphere,
         material,
     })
@@ -504,6 +513,24 @@ fn extend_vec<T>(vec: &mut Vec<T>, items: impl IntoIterator<Item = T>) -> usize 
     let index = vec.len();
     vec.extend(items);
     index
+}
+
+fn find_emissive_triangles(
+    material: u32,
+    index_offset: u32,
+    index_count: u32,
+    materials: &[Material],
+) -> Vec<u32> {
+    // This could be more fine grained by checking each triangle and the texture mapped
+    // emissive texture.
+    let material = &materials[material as usize];
+    material
+        .emissive
+        .map(f32::from)
+        .into_iter()
+        .any(|channel| channel > 0.0)
+        .then(|| Vec::from_iter(index_offset / 3..(index_offset + index_count) / 3))
+        .unwrap_or_default()
 }
 
 const ALBEDO_SPECS: TextureSpecs = TextureSpecs {

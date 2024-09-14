@@ -23,6 +23,13 @@ impl Integrator {
             binding!(storage_buffer, uint, indices, true, false),
             binding!(storage_buffer, Material, materials, true, false),
             binding!(storage_buffer, Instance, instances, true, false),
+            binding!(
+                storage_buffer,
+                EmissiveTriangle,
+                emissive_triangles,
+                true,
+                false
+            ),
             binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
             binding!(storage_buffer, uint64_t, reservoir_update_keys, true, true),
             binding!(storage_buffer, Reservoir, reservoirs, true, true),
@@ -68,6 +75,7 @@ impl Integrator {
             .bind_buffer("indices", &scene.indices)
             .bind_buffer("materials", &scene.materials)
             .bind_buffer("instances", &scene.instances)
+            .bind_buffer("emissive_triangles", &scene.emissive_triangles)
             .bind_buffer(
                 "reservoir_keys",
                 &self.restir_state.reservoir_hash_grid.keys,

@@ -26,6 +26,16 @@ struct ScatterProperties {
     float view_dot_half;
 };
 
+ScatterProperties create_scatter_properties(SurfaceProperties surface, vec3 direction, vec3 normal) {
+    ScatterProperties scatter;
+    scatter.direction = direction;
+    scatter.half_vector = normalize(surface.view_direction + scatter.direction);
+    scatter.normal_dot_half = saturate(dot(normal, scatter.half_vector));
+    scatter.normal_dot_scatter = saturate(dot(normal, scatter.direction));
+    scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
+    return scatter;
+}
+
 // The Schlick approximation of the Fresnel effect. The Fresnel effect describes
 // how light reflects off a surface at different angles. Steep angles result in weak
 // reflections, while shallow angles result in strong reflections.

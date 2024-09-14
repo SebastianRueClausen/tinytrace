@@ -56,11 +56,9 @@ pub struct BoundingSphere {
     pub radius: f32,
 }
 
-unsafe impl bytemuck::NoUninit for BoundingSphere {}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Mesh {
+    pub emissive_triangles: Vec<u32>,
     pub bounding_sphere: BoundingSphere,
     pub vertex_offset: u32,
     pub vertex_count: u32,
@@ -68,8 +66,6 @@ pub struct Mesh {
     pub index_count: u32,
     pub material: u32,
 }
-
-unsafe impl bytemuck::NoUninit for Mesh {}
 
 #[derive(Clone, Debug)]
 pub struct Model {

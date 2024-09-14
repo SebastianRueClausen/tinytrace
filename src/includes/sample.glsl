@@ -30,6 +30,17 @@ vec2 sample_disk(inout Generator generator) {
     return r * vec2(cos(phi), sin(phi));
 }
 
+vec3 sample_triangle(inout Generator generator) {
+    float b0 = random_float(generator) / 2.0, b1 = random_float(generator) / 2.0;
+    float offset = b1 - b0;
+    if (offset > 0.0) {
+        b1 += offset;
+    } else {
+        b0 -= offset;
+    }
+    return vec3(b0, b1, 1.0 - b0 - b1);
+}
+
 vec3 cosine_hemisphere_sample(inout Generator generator) {
     vec2 d = sample_disk(generator);
     return vec3(d, sqrt(max(0.0, 1.0 - d.x * d.x - d.y * d.y)));

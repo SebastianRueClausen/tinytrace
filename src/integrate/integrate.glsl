@@ -70,15 +70,10 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
 
     uint base_index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(query, true) + instance.index_offset;
     uvec3 triangle_indices = uvec3(
-        indices[base_index + 0],
-        indices[base_index + 1],
-        indices[base_index + 2]
+        indices[base_index + 0], indices[base_index + 1], indices[base_index + 2]
     ) + instance.vertex_offset;
-
     Vertex triangle_vertices[3] = Vertex[3](
-        vertices[triangle_indices[0]],
-        vertices[triangle_indices[1]],
-        vertices[triangle_indices[2]]
+        vertices[triangle_indices[0]], vertices[triangle_indices[1]], vertices[triangle_indices[2]]
     );
 
     vec3 barycentric = vec3(0.0, rayQueryGetIntersectionBarycentricsEXT(query, true));
@@ -101,9 +96,7 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     hit.tangent_space.tangent = normalize(normal_transform * hit.tangent_space.tangent);
 
     float bitangent_sign = sign(dot(barycentric, vec3(
-        tangent_frames[0].bitangent_sign,
-        tangent_frames[1].bitangent_sign,
-        tangent_frames[2].bitangent_sign
+        tangent_frames[0].bitangent_sign, tangent_frames[1].bitangent_sign, tangent_frames[2].bitangent_sign
     )));
     hit.tangent_space.bitangent
         = normalize(bitangent_sign * cross(hit.tangent_space.normal, hit.tangent_space.tangent));
@@ -111,10 +104,7 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     hit.texcoord = barycentric.x * vec2(triangle_vertices[0].texcoord)
         + barycentric.y * vec2(triangle_vertices[1].texcoord)
         + barycentric.z * vec2(triangle_vertices[2].texcoord);
-
-    hit.world_position = barycentric.x * positions[0]
-        + barycentric.y * positions[1]
-        + barycentric.z * positions[2];
+    hit.world_position = barycentric.x * positions[0] + barycentric.y * positions[1] + barycentric.z * positions[2];
 
     // Calculate the differentials of the texture coordinates using ray
     // differentials if it's the first bounce.
@@ -147,14 +137,7 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
 bool trace_ray(Ray ray, uint bounce, vec2 ndc, out RayHit hit) {
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(
-        ray_query,
-        acceleration_structure,
-        gl_RayFlagsOpaqueEXT,
-        0xff,
-        ray.origin,
-        1.0e-3,
-        ray.direction,
-        1000.0
+        ray_query, acceleration_structure, gl_RayFlagsOpaqueEXT, 0xff, ray.origin, 1.0e-3, ray.direction, 1000.0
     );
     while (rayQueryProceedEXT(ray_query));
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
@@ -178,6 +161,75 @@ float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
 
 vec3 normal_bias(vec3 position, vec3 normal) {
     return position + normal * 0.00001;
+}
+
+struct DirectLightSample {
+    vec3 barycentric;
+    vec3 position;
+    vec2 texcoord;
+    uint instance;
+    float pdf;
+};
+
+DirectLightSample sample_light(inout Generator generator) {
+    uint triangle_count = emissive_triangles.length();
+    EmissiveTriangle triangle = emissive_triangles[random_uint(generator, triangle_count)];
+    vec3 barycentric = sample_triangle(generator);
+    mat4 transform = instances[triangle.instance].transform;
+    float scaling = abs(determinant(transform));
+    vec3 positions[3] = vec3[3](
+        dequantize_snorm(triangle.positions[0]),
+        dequantize_snorm(triangle.positions[1]),
+        dequantize_snorm(triangle.positions[2])
+    );
+    float area = scaling * 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0]));
+    vec3 position = (transform * vec4(
+        barycentric[0] * positions[0] + barycentric[1] * positions[1] + barycentric[2] * positions[2], 1.0
+    )).xyz;
+    vec2 texcoord = barycentric[0] * vec2(triangle.texcoords[0])
+        + barycentric[1] * vec2(triangle.texcoords[1])
+        + barycentric[2] * vec2(triangle.texcoords[2]);
+    return DirectLightSample(barycentric, position, texcoord, triangle.instance, 1.0 / area);
+}
+
+vec3 direct_light_sampling(
+    vec3 position,
+    vec3 normal,
+    SurfaceProperties surface,
+    inout Generator generator
+) {
+    DirectLightSample light_sample = sample_light(generator);
+    // TODO: This can be micro-optimized.
+    Ray ray = Ray(normalize(light_sample.position - position), position);
+    float distance_squared = length_squared(ray.origin - light_sample.position);
+    float pdf_w = light_sample.pdf * distance_squared / abs(dot(normal, -ray.direction));
+
+    rayQueryEXT ray_query;
+    rayQueryInitializeEXT(
+        ray_query, acceleration_structure, gl_RayFlagsOpaqueEXT, 0xff, ray.origin, 1.0e-3, ray.direction, 1000.0
+    );
+    while (rayQueryProceedEXT(ray_query));
+    if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return vec3(0.0);
+    }
+
+    // TODO: Use triangle index.
+    uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
+    if (light_sample.instance != rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) {
+        return vec3(0.0);
+    }
+
+    Material material = materials[instances[light_sample.instance].material];
+
+    // TODO: Figure out a good mip level.
+    float mip_level = 4.0;
+    vec3 emissive = textureLod(textures[material.emissive_texture], light_sample.texcoord, mip_level).rgb
+        * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
+
+    ScatterProperties scatter = create_scatter_properties(surface, ray.direction, normal);
+    vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
+
+    return brdf * emissive * abs(scatter.normal_dot_scatter) / pdf_w;
 }
 
 Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
@@ -322,6 +374,7 @@ LobeType sample_scatter_direction(
     return lobe_type;
 }
 
+// Trace the next path segment. Returns true false if the path has left the scene.
 bool next_path_segment(
     inout PathState path_state,
     inout ResampleState resample_state,
@@ -385,7 +438,12 @@ bool next_path_segment(
     float pdf = 0.0;
     vec3 local_scatter, local_half_vector;
 
-    if (config.resample_path && !path_state.replay_path.is_found) {
+    bool can_reconnect = config.resample_path
+        // Check that we haven't already reconnected.
+        && !path_state.replay_path.is_found
+        // Check that we aren't "recording" a resample path.
+        && !resample_state.is_found;
+    if (can_reconnect) {
         uint64_t key = hash_grid_key(hash_grid_cell(
             normal_bias(hit.world_position, surface_basis.normal),
             constants.camera_position.xyz,
@@ -451,13 +509,8 @@ bool next_path_segment(
     path_state.ray.direction = transform_to_basis(surface_basis, local_scatter);
     path_state.ray.origin = normal_bias(hit.world_position, surface_basis.normal);
 
-    ScatterProperties scatter;
-    scatter.direction = path_state.ray.direction;
-    scatter.half_vector = normalize(surface.view_direction + scatter.direction);
-    scatter.normal_dot_half = saturate(dot(surface_basis.normal, scatter.half_vector));
-    scatter.normal_dot_scatter = saturate(dot(surface_basis.normal, scatter.direction));
-    scatter.view_dot_half = saturate(dot(surface.view_direction, scatter.half_vector));
-
+    ScatterProperties scatter =
+        create_scatter_properties(surface, path_state.ray.direction, surface_basis.normal);
     vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
     // FIXME: The minimum here fixes NaNs appearing sometimes,

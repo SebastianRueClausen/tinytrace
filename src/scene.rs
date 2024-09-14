@@ -1,8 +1,9 @@
 use std::borrow::Cow;
-use std::mem;
+use std::{array, mem};
 
 use ash::vk;
 use glam::{Mat4, Quat, Vec3};
+use half::f16;
 
 use crate::backend::resource::{BlasBuild, BlasRequest, BufferRange, TlasInstance};
 use crate::backend::{
@@ -17,6 +18,7 @@ pub struct Scene {
     pub indices: Handle<Buffer>,
     pub materials: Handle<Buffer>,
     pub instances: Handle<Buffer>,
+    pub emissive_triangles: Handle<Buffer>,
     pub textures: Vec<Handle<Image>>,
     pub texture_sampler: Handle<Sampler>,
     pub blases: Vec<Handle<Blas>>,
@@ -25,29 +27,38 @@ pub struct Scene {
 
 impl Scene {
     pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self, Error> {
-        let mut objects = Vec::new();
+        let mut scene_instances = Vec::new();
 
         for instance in &scene.instances {
-            flatten_instance_tree(scene, instance, Mat4::IDENTITY, &mut objects);
+            flatten_instance_tree(
+                scene,
+                instance,
+                Mat4::IDENTITY,
+                &scene.meshes,
+                &mut scene_instances,
+            );
         }
 
-        let instance_data: Vec<_> = objects
+        let emissive_triangle_data: Vec<EmissiveTriangle> = scene_instances
             .iter()
-            .map(|object| Object::instance(object, &scene.meshes[object.mesh_index as usize]))
+            .enumerate()
+            .flat_map(|(index, instance)| instance.emissive_triangles(scene, index as u32))
             .collect();
 
         let positions = create_buffer(context, &scene.positions)?;
         let vertices = create_buffer(context, &scene.vertices)?;
         let indices = create_buffer(context, &scene.indices)?;
         let materials = create_buffer(context, &scene.materials)?;
-        let instances = create_buffer(context, &instance_data)?;
+        let instances = create_buffer(context, &scene_instances)?;
+        let emissive_triangles = create_buffer(context, &emissive_triangle_data)?;
 
         context.write_buffers(&[
             scene_buffer_write(&positions, &scene.positions),
             scene_buffer_write(&vertices, &scene.vertices),
             scene_buffer_write(&indices, &scene.indices),
             scene_buffer_write(&materials, &scene.materials),
-            scene_buffer_write(&instances, &instance_data),
+            scene_buffer_write(&instances, &scene_instances),
+            scene_buffer_write(&emissive_triangles, &emissive_triangle_data),
         ])?;
 
         let textures: Vec<_> = scene
@@ -112,10 +123,10 @@ impl Scene {
             .collect();
         context.build_blases(&blas_builds).unwrap();
 
-        let tlas_instances: Vec<_> = objects
+        let tlas_instances: Vec<_> = scene_instances
             .iter()
             .enumerate()
-            .map(|(index, object)| object.tlas_instance(scene, &blases, index as u32))
+            .map(|(index, instance)| instance.tlas_instance(&blases, index as u32))
             .collect();
         let tlas = context.create_tlas(Lifetime::Scene, tlas_instances.len() as u32)?;
 
@@ -127,6 +138,7 @@ impl Scene {
             indices,
             materials,
             instances,
+            emissive_triangles,
             textures,
             texture_sampler,
             blases,
@@ -135,68 +147,44 @@ impl Scene {
     }
 }
 
-struct Object {
-    mesh_index: u32,
-    material: u32,
-    transform: Mat4,
-}
-
-impl Object {
-    fn instance(&self, mesh: &asset::Mesh) -> Instance {
-        let asset::BoundingSphere { radius, center } = mesh.bounding_sphere;
-        let transform = self.transform
-            * Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
-        let inverse_transform = transform.inverse();
-        Instance {
-            normal_transform: self.transform.inverse().transpose(),
-            material: self.material,
-            vertex_offset: mesh.vertex_offset,
-            index_offset: mesh.index_offset,
-            inverse_transform,
-            transform,
-            padding: 0,
-        }
-    }
-
-    fn tlas_instance(
-        &self,
-        scene: &asset::Scene,
-        blases: &[Handle<Blas>],
-        index: u32,
-    ) -> TlasInstance {
-        let asset::BoundingSphere { radius, center } =
-            scene.meshes[self.mesh_index as usize].bounding_sphere;
-        let transform =
-            Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
-        TlasInstance {
-            transform: self.transform * transform,
-            blas: blases[self.mesh_index as usize].clone(),
-            index,
-        }
-    }
-}
-
 fn flatten_instance_tree(
     scene: &asset::Scene,
     instance: &asset::Instance,
     parent_transform: Mat4,
-    objects: &mut Vec<Object>,
+    meshes: &[asset::Mesh],
+    instances: &mut Vec<Instance>,
 ) -> Mat4 {
     let transform = parent_transform * instance.transform;
-
     if let Some(model_index) = instance.model_index {
         let model = &scene.models[model_index as usize];
-        objects.extend(model.mesh_indices.iter().copied().map(|mesh_index| Object {
-            material: scene.meshes[mesh_index as usize].material,
-            transform,
-            mesh_index,
+        instances.extend(model.mesh_indices.iter().copied().map(|mesh| {
+            let asset::Mesh {
+                bounding_sphere: asset::BoundingSphere { radius, center },
+                vertex_offset,
+                index_offset,
+                material,
+                ..
+            } = meshes[mesh as usize];
+            let position_transform = transform
+                * Mat4::from_scale_rotation_translation(
+                    Vec3::splat(radius),
+                    Quat::IDENTITY,
+                    center,
+                );
+            Instance {
+                normal_transform: transform.inverse().transpose(),
+                inverse_transform: position_transform.inverse(),
+                transform: position_transform,
+                mesh,
+                material,
+                index_offset,
+                vertex_offset,
+            }
         }));
     }
-
     for child in &instance.children {
-        flatten_instance_tree(scene, child, transform, objects);
+        flatten_instance_tree(scene, child, transform, meshes, instances);
     }
-
     transform
 }
 
@@ -248,6 +236,15 @@ fn create_texture(
 }
 
 #[repr(C)]
+#[derive(bytemuck::NoUninit, Debug, Default, Clone, Copy)]
+pub struct EmissiveTriangle {
+    pub positions: [[i16; 3]; 3],
+    pub tex_coords: [[f16; 2]; 3],
+    pub padding: u16,
+    pub instance: u32,
+}
+
+#[repr(C)]
 #[derive(bytemuck::NoUninit, Debug, Clone, Copy)]
 struct Instance {
     transform: Mat4,
@@ -256,5 +253,37 @@ struct Instance {
     vertex_offset: u32,
     index_offset: u32,
     material: u32,
-    padding: u32,
+    mesh: u32,
+}
+
+impl Instance {
+    fn tlas_instance(&self, blases: &[Handle<Blas>], index: u32) -> TlasInstance {
+        TlasInstance {
+            transform: self.transform,
+            blas: blases[self.mesh as usize].clone(),
+            index,
+        }
+    }
+
+    fn emissive_triangles<'a>(
+        &'a self,
+        scene: &'a asset::Scene,
+        instance_index: u32,
+    ) -> impl Iterator<Item = EmissiveTriangle> + 'a {
+        let mesh = &scene.meshes[self.mesh as usize];
+        mesh.emissive_triangles.iter().map(move |triangle_index| {
+            let base_index = (*triangle_index * 3 + mesh.index_offset) as usize;
+            let indices: [usize; 3] = array::from_fn(|vertex| {
+                (scene.indices[base_index + vertex] + mesh.vertex_offset) as usize
+            });
+            EmissiveTriangle {
+                tex_coords: indices.map(|index| scene.vertices[index].tex_coord),
+                positions: indices.map(|index| {
+                    array::from_fn(|coordinate| scene.positions[index * 3 + coordinate])
+                }),
+                instance: instance_index,
+                padding: 0,
+            }
+        })
+    }
 }

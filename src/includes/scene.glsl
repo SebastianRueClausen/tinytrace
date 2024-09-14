@@ -1,6 +1,13 @@
 #include "constants"
 #include "octahedron"
 
+struct EmissiveTriangle {
+    int16_t positions[3][3];
+    f16vec2 texcoords[3];
+    uint16_t padding;
+    uint instance;
+};
+
 struct Vertex {
     f16vec2 texcoord;
     uint tangent_frame;
@@ -22,6 +29,18 @@ vec3 deterministic_orthonormal_vector(vec3 normal) {
 
 float dequantize_unorm(uint bits, uint value) {
     return float(value) / float((1 << bits) - 1);
+}
+
+float dequantize_snorm(uint bits, int value) {
+    return float(value) / float((1 << (bits - 1)) - 1);
+}
+
+float dequantize_snorm(int16_t value) {
+    return dequantize_snorm(16, int(value));
+}
+
+vec3 dequantize_snorm(int16_t values[3]) {
+    return vec3(dequantize_snorm(values[0]), dequantize_snorm(values[1]), dequantize_snorm(values[2]));
 }
 
 TangentFrame decode_tangent_frame(uint encoded) {

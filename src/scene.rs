@@ -239,8 +239,8 @@ fn create_texture(
 #[derive(bytemuck::NoUninit, Debug, Default, Clone, Copy)]
 pub struct EmissiveTriangle {
     pub positions: [[i16; 3]; 3],
+    pub hash: u16,
     pub tex_coords: [[f16; 2]; 3],
-    pub padding: u16,
     pub instance: u32,
 }
 
@@ -272,7 +272,7 @@ impl Instance {
     ) -> impl Iterator<Item = EmissiveTriangle> + 'a {
         let mesh = &scene.meshes[self.mesh as usize];
         mesh.emissive_triangles.iter().map(move |triangle_index| {
-            let base_index = (*triangle_index * 3 + mesh.index_offset) as usize;
+            let base_index = *triangle_index as usize * 3;
             let indices: [usize; 3] = array::from_fn(|vertex| {
                 (scene.indices[base_index + vertex] + mesh.vertex_offset) as usize
             });
@@ -282,7 +282,7 @@ impl Instance {
                     array::from_fn(|coordinate| scene.positions[index * 3 + coordinate])
                 }),
                 instance: instance_index,
-                padding: 0,
+                hash: (triangle_index % u16::MAX as u32) as u16,
             }
         })
     }

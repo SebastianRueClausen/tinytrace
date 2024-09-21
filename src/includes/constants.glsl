@@ -4,6 +4,7 @@
 #include "hash_grid"
 #include "sample"
 #include "restir"
+#include "light_sampling"
 
 struct Constants {
     mat4 view, proj, proj_view, inverse_view, inverse_proj;
@@ -15,6 +16,7 @@ struct Constants {
     SampleStrategy sample_strategy;
     uint reservoir_updates_per_cell, reservoirs_per_cell;
     RestirReplay restir_replay;
+    LightSampling light_sampling;
 };
 
 #endif

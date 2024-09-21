@@ -21,6 +21,7 @@ use backend::{
     ImageRequest, Lifetime, MemoryLocation,
 };
 use camera::Camera;
+use config::LightSampling;
 pub use config::{Config, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
@@ -63,6 +64,10 @@ impl Renderer {
         context.add_include("debug", include_str!("includes/debug.glsl").into());
         context.add_include("hash_grid", include_str!("includes/hash_grid.glsl").into());
         context.add_include("restir", include_str!("includes/restir.glsl").into());
+        context.add_include(
+            "light_sampling",
+            include_str!("includes/light_sampling.glsl").into(),
+        );
 
         let render_target = create_render_target(&mut context, extent)?;
         let constants = context.create_buffer(
@@ -147,9 +152,11 @@ impl Renderer {
             reservoirs_per_cell: self.config.restir.reservoirs_per_cell,
             reservoir_updates_per_cell: self.config.restir.updates_per_cell,
             restir_replay: self.config.restir.replay,
+            light_sampling: self.config.light_sampling,
             proj_view,
             view,
             proj,
+            padding: Default::default(),
         };
 
         self.context.write_buffers(&[BufferWrite {
@@ -260,6 +267,8 @@ struct Constants {
     reservoir_updates_per_cell: u32,
     reservoirs_per_cell: u32,
     restir_replay: RestirReplay,
+    light_sampling: LightSampling,
+    padding: [u32; 3],
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

@@ -54,27 +54,30 @@ vec3 camera_ray_direction(vec2 ndc) {
     return normalize((constants.inverse_view * vec4(view_space_point.xyz, 0.0)).xyz);
 }
 
+vec2 interpolate(vec3 barycentric, f16vec2 a, f16vec2 b, f16vec2 c) {
+    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
+}
+
+vec3 interpolate(vec3 barycentric, vec3 a, vec3 b, vec3 c) {
+    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
+}
+
 RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     RayHit hit;
 
     hit.instance = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
     Instance instance = instances[hit.instance];
+    mat4x3 transform = mat4x3(instance.transform);
 
     vec3 positions[3];
     rayQueryGetIntersectionTriangleVertexPositionsEXT(query, true, positions);
 
     // Transform positions from model to world space.
-    for (uint i = 0; i < 3; i++) {
-        positions[i] = (instance.transform * vec4(positions[i], 1.0)).xyz;
-    }
+    for (uint i = 0; i < 3; i++) positions[i] = transform * vec4(positions[i], 1.0);
 
     uint base_index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(query, true) + instance.index_offset;
-    uvec3 triangle_indices = uvec3(
-        indices[base_index + 0], indices[base_index + 1], indices[base_index + 2]
-    ) + instance.vertex_offset;
-    Vertex triangle_vertices[3] = Vertex[3](
-        vertices[triangle_indices[0]], vertices[triangle_indices[1]], vertices[triangle_indices[2]]
-    );
+    uvec3 triangle_indices = uvec3(indices[base_index + 0], indices[base_index + 1], indices[base_index + 2]) + instance.vertex_offset;
+    Vertex triangle_vertices[3] = Vertex[3](vertices[triangle_indices[0]], vertices[triangle_indices[1]], vertices[triangle_indices[2]]);
 
     vec3 barycentric = vec3(0.0, rayQueryGetIntersectionBarycentricsEXT(query, true));
     barycentric.x = 1.0 - barycentric.y - barycentric.z;
@@ -86,49 +89,31 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     );
 
     mat3 normal_transform = mat3(instance.normal_transform);
-    hit.tangent_space.normal = normalize(barycentric.x * tangent_frames[0].normal
-        + barycentric.y * tangent_frames[1].normal
-        + barycentric.z * tangent_frames[2].normal);
-    hit.tangent_space.tangent = normalize(barycentric.x * tangent_frames[0].tangent
-        + barycentric.y * tangent_frames[1].tangent
-        + barycentric.z * tangent_frames[2].tangent);
-    hit.tangent_space.normal = normalize(normal_transform * hit.tangent_space.normal);
-    hit.tangent_space.tangent = normalize(normal_transform * hit.tangent_space.tangent);
-
+    hit.tangent_space.normal = normalize(normal_transform * interpolate(
+        barycentric, tangent_frames[0].normal, tangent_frames[1].normal, tangent_frames[2].normal
+    ));
+    hit.tangent_space.tangent = normalize(normal_transform * interpolate(
+        barycentric, tangent_frames[0].tangent, tangent_frames[1].tangent, tangent_frames[2].tangent
+    ));
     float bitangent_sign = sign(dot(barycentric, vec3(
         tangent_frames[0].bitangent_sign, tangent_frames[1].bitangent_sign, tangent_frames[2].bitangent_sign
     )));
     hit.tangent_space.bitangent
         = normalize(bitangent_sign * cross(hit.tangent_space.normal, hit.tangent_space.tangent));
 
-    hit.texcoord = barycentric.x * vec2(triangle_vertices[0].texcoord)
-        + barycentric.y * vec2(triangle_vertices[1].texcoord)
-        + barycentric.z * vec2(triangle_vertices[2].texcoord);
+    hit.texcoord = interpolate(barycentric, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord, triangle_vertices[2].texcoord);
     hit.world_position = barycentric.x * positions[0] + barycentric.y * positions[1] + barycentric.z * positions[2];
 
     // Calculate the differentials of the texture coordinates using ray
     // differentials if it's the first bounce.
     if (bounce == 0) {
         vec2 texel_size = 2.0 / vec2(constants.screen_size);
-
-        Ray ray;
-        ray.origin = rayQueryGetWorldRayOriginEXT(query);
-
-        ray.direction = camera_ray_direction(vec2(ndc.x + texel_size.x, ndc.y));
+        Ray ray = Ray(camera_ray_direction(vec2(ndc.x + texel_size.x, ndc.y)), rayQueryGetWorldRayOriginEXT(query));
         vec3 hx = triangle_intersection(positions, ray);
-
         ray.direction = camera_ray_direction(vec2(ndc.x, ndc.y + texel_size.y));
         vec3 hy = triangle_intersection(positions, ray);
-
-        vec3 ddx = barycentric - hx;
-        vec3 ddy = barycentric - hy;
-
-        hit.texcoord_ddx = ddx.x * vec2(triangle_vertices[0].texcoord)
-            + ddx.y * vec2(triangle_vertices[1].texcoord)
-            + ddx.z * vec2(triangle_vertices[2].texcoord);
-        hit.texcoord_ddy = ddy.x * vec2(triangle_vertices[0].texcoord)
-            + ddy.y * vec2(triangle_vertices[1].texcoord)
-            + ddy.z * vec2(triangle_vertices[2].texcoord);
+        hit.texcoord_ddx = interpolate(barycentric - hx, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord, triangle_vertices[2].texcoord);
+        hit.texcoord_ddy = interpolate(barycentric - hy, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord, triangle_vertices[2].texcoord);
     }
 
     return hit;
@@ -164,60 +149,52 @@ vec3 normal_bias(vec3 position, vec3 normal) {
 }
 
 struct DirectLightSample {
-    vec3 barycentric;
-    vec3 position;
+    vec3 barycentric, position, normal;
     vec2 texcoord;
-    uint instance;
-    float pdf;
+    uint instance, hash;
+    float area, light_probability;
 };
 
-DirectLightSample sample_light(inout Generator generator) {
+DirectLightSample sample_random_light(inout Generator generator) {
     uint triangle_count = emissive_triangles.length();
     EmissiveTriangle triangle = emissive_triangles[random_uint(generator, triangle_count)];
     vec3 barycentric = sample_triangle(generator);
-    mat4 transform = instances[triangle.instance].transform;
-    float scaling = abs(determinant(transform));
+    mat4x3 transform = mat4x3(instances[triangle.instance].transform);
     vec3 positions[3] = vec3[3](
-        dequantize_snorm(triangle.positions[0]),
-        dequantize_snorm(triangle.positions[1]),
-        dequantize_snorm(triangle.positions[2])
+        transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
+        transform * vec4(dequantize_snorm(triangle.positions[1]), 1.0),
+        transform * vec4(dequantize_snorm(triangle.positions[2]), 1.0)
     );
-    float area = scaling * 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0]));
-    vec3 position = (transform * vec4(
-        barycentric[0] * positions[0] + barycentric[1] * positions[1] + barycentric[2] * positions[2], 1.0
-    )).xyz;
-    vec2 texcoord = barycentric[0] * vec2(triangle.texcoords[0])
-        + barycentric[1] * vec2(triangle.texcoords[1])
-        + barycentric[2] * vec2(triangle.texcoords[2]);
-    return DirectLightSample(barycentric, position, texcoord, triangle.instance, 1.0 / area);
+    float area = max(0.00001, 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0])));
+    vec3 normal = normalize(cross(positions[1] - positions[0], positions[2] - positions[0]));
+    vec3 position = normal_bias(barycentric[0] * positions[0] + barycentric[1] * positions[1] + barycentric[2] * positions[2], normal);
+    vec2 texcoord = interpolate(barycentric, triangle.texcoords[0], triangle.texcoords[1], triangle.texcoords[2]);
+    return DirectLightSample(
+        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area, 1.0 / triangle_count
+    );
 }
 
-vec3 direct_light_sampling(
-    vec3 position,
-    vec3 normal,
-    SurfaceProperties surface,
-    inout Generator generator
-) {
-    DirectLightSample light_sample = sample_light(generator);
+vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties surface, inout Generator generator) {
+    DirectLightSample light_sample = sample_random_light(generator);
     // TODO: This can be micro-optimized.
     Ray ray = Ray(normalize(light_sample.position - position), position);
-    float distance_squared = length_squared(ray.origin - light_sample.position);
-    float pdf_w = light_sample.pdf * distance_squared / abs(dot(normal, -ray.direction));
+    float distance_squared = length_squared(light_sample.position - position);
+    // Transform the area density to the solid angle density.
+    float pdf = (1.0 / light_sample.area) * distance_squared / saturate(dot(-ray.direction, light_sample.normal)) * light_sample.light_probability;
 
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(
-        ray_query, acceleration_structure, gl_RayFlagsOpaqueEXT, 0xff, ray.origin, 1.0e-3, ray.direction, 1000.0
+        ray_query, acceleration_structure, gl_RayFlagsOpaqueEXT, 0xff, ray.origin, 1.0e-3, ray.direction, 10000.0
     );
     while (rayQueryProceedEXT(ray_query));
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         return vec3(0.0);
     }
 
-    // TODO: Use triangle index.
-    uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
-    if (light_sample.instance != rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) {
-        return vec3(0.0);
-    }
+    uint instance_index = rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true);
+    if (instance_index != light_sample.instance) return vec3(0.0);
+    uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true) + instances[instance_index].index_offset / 3;
+    if (triangle_index % 0xffff != light_sample.hash) return vec3(0.0);
 
     Material material = materials[instances[light_sample.instance].material];
 
@@ -229,7 +206,7 @@ vec3 direct_light_sampling(
     ScatterProperties scatter = create_scatter_properties(surface, ray.direction, normal);
     vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
-    return brdf * emissive * abs(scatter.normal_dot_scatter) / pdf_w;
+    return brdf * emissive * abs(scatter.normal_dot_scatter) / pdf;
 }
 
 Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
@@ -474,12 +451,31 @@ bool next_path_segment(
     }
 
     Generator before_sample_generator = path_state.path_generator;
+
+    bool perform_next_event_estimation = surface.roughness > 0.15
+        && constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION;
+
+    // Next event estimation.
+    if (perform_next_event_estimation) {
+        vec3 direct_light =
+            direct_light_contribution(hit.world_position, surface_basis.normal, surface, path_state.path_generator);
+        path_state.accumulated += path_state.attenuation * direct_light;
+        if (resample_state.is_found) {
+            resample_state.accumulated += direct_light * resample_state.attenuation;
+        }
+    }
+
+    // TODO: Figure out how to handle hitting light sources directly.
+    if (bounce == 0 || !perform_next_event_estimation) {
+        path_state.accumulated += emissive * path_state.attenuation;
+        if (resample_state.is_found) {
+            resample_state.accumulated += emissive * resample_state.attenuation;
+        }
+    }
+
     LobeType lobe_type = 0;
     if (pdf == 0.0) {
-        lobe_type = sample_scatter_direction(
-            surface, path_state.path_generator, local_view,
-            local_scatter, local_half_vector, pdf
-        );
+        lobe_type = sample_scatter_direction(surface, path_state.path_generator, local_view, local_scatter, local_half_vector, pdf);
     }
 
     bool can_form_resample_path = config.find_resample_path
@@ -519,18 +515,13 @@ bool next_path_segment(
     // not algebraic).
     vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
 
-    path_state.accumulated += emissive * path_state.attenuation;
-
     if (constants.restir_replay == REPLAY_NONE && path_state.replay_path.is_found) {
         path_state.accumulated += attenuation_factor * path_state.attenuation * path_state.replay_path.radiance;
         return false;
     }
 
     path_state.attenuation *= attenuation_factor;
-    if (resample_state.is_found) {
-        resample_state.accumulated += emissive * resample_state.attenuation;
-        resample_state.attenuation *= attenuation_factor;
-    }
+    if (resample_state.is_found) resample_state.attenuation *= attenuation_factor;
 
     resample_state.previous_normal = surface_basis.normal;
     resample_state.previous_bounce_was_diffuse = surface.roughness > 0.25;

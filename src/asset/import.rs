@@ -353,8 +353,7 @@ fn create_texture(
     create_mips: bool,
     mut encode: impl FnMut(&mut [u8]) + Copy,
 ) -> Texture {
-    let width = image.width().next_multiple_of(4);
-    let height = image.height().next_multiple_of(4);
+    let (width, height) = (image.width(), image.height());
     let mip_level_count = if create_mips {
         let extent = u32::min(width, height) as f32;
         let count = extent.log2().floor() as u32;
@@ -371,12 +370,8 @@ fn create_texture(
     let filter = image::imageops::FilterType::Lanczos3;
     let mips = (0..mip_level_count)
         .map(|level| {
-            image = if level == 0 {
-                image.resize_exact(width, height, filter)
-            } else {
-                let width = (image.width() / 2).next_multiple_of(4);
-                let height = (image.height() / 2).next_multiple_of(4);
-                image.resize_exact(width, height, filter)
+            if level != 0 {
+                image = image.resize_exact(image.width() / 2, image.height() / 2, filter);
             };
             let mut mip = image.clone().into_rgba8();
             mip.pixels_mut().for_each(|pixel| encode(&mut pixel.0));

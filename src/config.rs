@@ -30,12 +30,40 @@ impl fmt::Display for SampleStrategy {
     }
 }
 
+/// How to gather light along a path.
+#[repr(u32)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LightSampling {
+    /// The only light contribution is from emissive surfaces randomly hit by paths.
+    None = 1,
+    /// Direct light is explicitly sampled along a path at each bounce if possible.
+    #[default]
+    NextEventEstimation = 2,
+}
+
+impl fmt::Display for LightSampling {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::NextEventEstimation => write!(f, "Next event estimation"),
+        }
+    }
+}
+
+/// How paths are replayed in world space ReSTIR.
 #[repr(u32)]
 #[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RestirReplay {
+    /// Upon sampling from a reservoir, it's assumed that it's possible to reconnect to the
+    /// first bounce and that the path remains valid. This can cause a lot of bias even in static
+    /// scenes.
     None = 1,
+    /// Upon sampling from a reservoir, a ray is traced from the sample point to the first bounce.
+    /// This eliminates bias in static scenes, but may still cause bias if objects or lights are
+    /// moved.
     #[default]
     First = 2,
+    /// Retrace the full path to eleminate bias even in dynamic scenes.
     Full = 3,
 }
 
@@ -94,6 +122,7 @@ pub struct Config {
     pub sample_count: u32,
     pub tonemap: bool,
     pub sample_strategy: SampleStrategy,
+    pub light_sampling: LightSampling,
     pub restir: RestirConfig,
 }
 
@@ -102,6 +131,7 @@ impl Default for Config {
         Self {
             restir: RestirConfig::default(),
             sample_strategy: SampleStrategy::default(),
+            light_sampling: LightSampling::default(),
             tonemap: true,
             bounce_count: 4,
             sample_count: 1,

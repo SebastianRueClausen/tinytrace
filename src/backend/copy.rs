@@ -32,6 +32,7 @@ fn buffer_image_copy(
     buffer_offset: vk::DeviceSize,
     offset: vk::Offset3D,
     extent: vk::Extent3D,
+    block_extent: vk::Extent2D,
 ) -> vk::BufferImageCopy {
     let subresource = vk::ImageSubresourceLayers::default()
         .aspect_mask(aspect)
@@ -42,8 +43,8 @@ fn buffer_image_copy(
         .buffer_offset(buffer_offset)
         .image_extent(extent)
         .image_offset(offset)
-        .buffer_image_height(extent.height)
-        .buffer_row_length(extent.width)
+        .buffer_row_length(extent.width.next_multiple_of(block_extent.width))
+        .buffer_image_height(extent.height.next_multiple_of(block_extent.height))
         .image_subresource(subresource)
 }
 
@@ -133,6 +134,7 @@ impl Context {
                         buffer_offset,
                         offset,
                         extent,
+                        image.format.info().block_extent,
                     );
                     self.device.cmd_copy_buffer_to_image(
                         self.command_buffer().buffer,
@@ -202,6 +204,7 @@ impl Context {
         // Copy images into scratch.
         let scratch_offset = images.iter().fold(0, |scratch_offset, image| unsafe {
             let image = self.image(image);
+            let block_extent = image.format.info().block_extent;
             let mut image_offset = 0;
             let copies: Vec<_> = (0..image.mip_level_count)
                 .map(|level| {
@@ -213,6 +216,7 @@ impl Context {
                         buffer_offset,
                         vk::Offset3D::default(),
                         resource::mip_level_extent(image.extent, level),
+                        block_extent,
                     )
                 })
                 .collect();

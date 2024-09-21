@@ -8,6 +8,7 @@ use egui::RichText;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
+use tinytrace::config::LightSampling;
 use tinytrace::error::ErrorKind;
 use tinytrace::{asset, backend, Renderer, RestirReplay, SampleStrategy, Timings};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
@@ -127,7 +128,9 @@ impl RenderState {
             .camera_controller
             .camera_move(&self.renderer.camera, dt);
         self.renderer.camera.move_by(camera_move);
-        if previous_camera.different_from(&self.renderer.camera) {
+        if !self.renderer_controller.accumulate
+            || previous_camera.different_from(&self.renderer.camera)
+        {
             self.renderer.reset_accumulation();
         }
         self.renderer.render_to_target().unwrap();
@@ -182,7 +185,7 @@ impl RenderState {
                         }
                     });
                     if let Some(timings) = self.renderer.timings() {
-                        timings_gui(&timings, ui);
+                        ui.collapsing("Timings", |ui| timings_gui(&timings, ui));
                     }
                 });
         })
@@ -334,9 +337,18 @@ impl SceneController {
     }
 }
 
-#[derive(Default)]
 struct RendererController {
     config: tinytrace::Config,
+    accumulate: bool,
+}
+
+impl Default for RendererController {
+    fn default() -> Self {
+        Self {
+            config: tinytrace::Config::default(),
+            accumulate: true,
+        }
+    }
 }
 
 impl RendererController {
@@ -364,10 +376,25 @@ impl RendererController {
                     option(SampleStrategy::Brdf);
                 });
             ui.end_row();
+            egui::ComboBox::from_label("Light sampling")
+                .selected_text(format!("{}", self.config.light_sampling))
+                .show_ui(ui, |ui| {
+                    let mut option = |value| {
+                        ui.selectable_value(
+                            &mut self.config.light_sampling,
+                            value,
+                            format!("{value}"),
+                        );
+                    };
+                    option(LightSampling::None);
+                    option(LightSampling::NextEventEstimation);
+                });
+            ui.end_row();
             let mut checkbox = |value: &mut bool, label: &str| {
                 ui.add(egui::Checkbox::new(value, label));
                 ui.end_row();
             };
+            checkbox(&mut self.accumulate, "Accumulate");
             checkbox(&mut self.config.tonemap, "Enable tonemapping");
             checkbox(&mut self.config.restir.enabled, "Enable world space ReSTIR");
             ui.add_enabled_ui(self.config.restir.enabled, |ui| {

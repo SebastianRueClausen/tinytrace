@@ -140,6 +140,9 @@ fn add_item<T>(vector: &mut Vec<T>, item: T) -> usize {
 
 impl Scene {
     fn add_texture(&mut self, texture: Texture) -> u16 {
+        // For now, every texture kind is block compressed.
+        assert!(texture.width % 4 == 0);
+        assert!(texture.height % 4 == 0);
         add_item(&mut self.textures, texture) as u16
     }
 

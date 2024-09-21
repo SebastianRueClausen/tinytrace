@@ -3,8 +3,8 @@
 
 struct EmissiveTriangle {
     int16_t positions[3][3];
+    uint16_t hash;
     f16vec2 texcoords[3];
-    uint16_t padding;
     uint instance;
 };
 

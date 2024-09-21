@@ -4,12 +4,12 @@ use ash::vk;
 use glam::Vec3;
 use half::f16;
 
-use crate::backend::{
-    self, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Handle, Lifetime,
+use crate::hash_grid::{HashGrid, HashGridLayout};
+use crate::{Error, RestirConfig};
+use tinytrace_backend::{
+    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Handle, Lifetime,
     MemoryLocation, Shader, ShaderRequest,
 };
-use crate::hash_grid::{HashGrid, HashGridLayout};
-use crate::{binding, Error, RestirConfig};
 
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug)]
@@ -50,7 +50,7 @@ fn create_buffer(
     context: &mut Context,
     count: u32,
     value_size: usize,
-) -> Result<Handle<Buffer>, backend::Error> {
+) -> Result<Handle<Buffer>, tinytrace_backend::Error> {
     context.create_buffer(
         Lifetime::Renderer,
         &BufferRequest {

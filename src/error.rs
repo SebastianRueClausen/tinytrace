@@ -1,4 +1,3 @@
-use crate::backend;
 use std::{
     backtrace::{self, Backtrace},
     fmt, io,
@@ -7,7 +6,7 @@ use std::{
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
     #[error("backend failed with error: {0}")]
-    Backend(#[from] backend::Error),
+    Backend(#[from] tinytrace_backend::Error),
     #[error("failed to read scene: {0}")]
     Io(#[from] io::Error),
 }

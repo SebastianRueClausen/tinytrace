@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use ash::vk;
 
 use super::create_test_buffer;
-use crate::backend::*;
+use crate::*;
 
 fn random_bytes(count: usize) -> Box<[u8]> {
     (0..count).map(|value| (value % 255) as u8).collect()

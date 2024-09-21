@@ -1,9 +1,9 @@
 use ash::vk;
 
-use crate::backend::{
-    Binding, BindingType, Buffer, Context, Error, Handle, Image, Lifetime, Shader, ShaderRequest,
+use tinytrace_backend::{
+    binding, Binding, BindingType, Buffer, Context, Error, Handle, Image, Lifetime, Shader,
+    ShaderRequest,
 };
-use crate::binding;
 
 pub struct PostProcess {
     display: Handle<Shader>,

@@ -2,7 +2,7 @@ use std::mem;
 
 use ash::vk;
 
-use crate::backend::{
+use tinytrace_backend::{
     Buffer, BufferRequest, BufferType, Context, Error, Handle, Lifetime, MemoryLocation,
 };
 

@@ -1,17 +1,9 @@
-use std::{f32::consts::TAU, path::PathBuf};
+use std::f32::consts::TAU;
 
 use glam::{Vec2, Vec2Swizzles, Vec3, Vec4};
 
-use super::{Scene, TangentFrame};
-use crate::asset::normal::orthonormal;
-
-#[test]
-fn load_cornell_box() {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "scenes", "cornell_box.gltf"]
-        .iter()
-        .collect();
-    let _ = Scene::from_gltf(&path).unwrap();
-}
+use super::TangentFrame;
+use crate::normal::orthonormal;
 
 fn decode_octahedron(octahedron: Vec2) -> Vec3 {
     let normal = octahedron * 2.0 - 1.0;

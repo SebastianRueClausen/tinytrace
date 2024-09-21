@@ -1,12 +1,12 @@
 mod restir;
 
-use crate::backend::{
-    Binding, BindingType, Buffer, Handle, Image, Lifetime, Shader, ShaderRequest,
-};
 use crate::scene::Scene;
-use crate::{binding, Context, Error, RestirConfig};
+use crate::{Context, Error, RestirConfig};
 use ash::vk;
 use restir::RestirState;
+use tinytrace_backend::{
+    binding, Binding, BindingType, Buffer, Handle, Image, Lifetime, Shader, ShaderRequest,
+};
 
 pub struct Integrator {
     pub integrate: Handle<Shader>,

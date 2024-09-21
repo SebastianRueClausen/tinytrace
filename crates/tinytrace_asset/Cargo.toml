@@ -1,0 +1,17 @@
+[package]
+name = "tinytrace_asset"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glam = { version = "0.27.0", features = ["bytemuck"] }
+thiserror = "1.0.59"
+bytemuck = { version = "1.15.0", features = ["derive", "extern_crate_std"] }
+half = { version = "2.4.1", features = ["bytemuck"] }
+gltf = { version = "1.4.1", features = [
+    "KHR_materials_ior",
+    "KHR_materials_emissive_strength",
+] }
+image = "0.25.1"
+mikktspace = "0.3.0"
+texpresso = { version = "2.0.1", features = ["rayon"] }

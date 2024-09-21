@@ -5,13 +5,12 @@ use ash::vk;
 use glam::{Mat4, Quat, Vec3};
 use half::f16;
 
-use crate::backend::resource::{BlasBuild, BlasRequest, BufferRange, TlasInstance};
-use crate::backend::{
-    Blas, Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
-    ImageRequest, ImageWrite, Lifetime, MemoryLocation, Sampler, SamplerRequest, Tlas,
-};
 use crate::Error;
-use crate::{asset, backend};
+use tinytrace_backend::{
+    Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, BufferWrite,
+    Context, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation,
+    Sampler, SamplerRequest, Tlas, TlasInstance,
+};
 
 pub struct Scene {
     pub vertices: Handle<Buffer>,
@@ -26,7 +25,7 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self, Error> {
+    pub fn new(context: &mut Context, scene: &tinytrace_asset::Scene) -> Result<Self, Error> {
         let mut scene_instances = Vec::new();
 
         for instance in &scene.instances {
@@ -103,7 +102,7 @@ impl Scene {
                     },
                 )
             })
-            .collect::<Result<_, backend::Error>>()?;
+            .collect::<Result<_, tinytrace_backend::Error>>()?;
 
         let blas_builds: Vec<_> = blases
             .iter()
@@ -148,18 +147,18 @@ impl Scene {
 }
 
 fn flatten_instance_tree(
-    scene: &asset::Scene,
-    instance: &asset::Instance,
+    scene: &tinytrace_asset::Scene,
+    instance: &tinytrace_asset::Instance,
     parent_transform: Mat4,
-    meshes: &[asset::Mesh],
+    meshes: &[tinytrace_asset::Mesh],
     instances: &mut Vec<Instance>,
 ) -> Mat4 {
     let transform = parent_transform * instance.transform;
     if let Some(model_index) = instance.model_index {
         let model = &scene.models[model_index as usize];
         instances.extend(model.mesh_indices.iter().copied().map(|mesh| {
-            let asset::Mesh {
-                bounding_sphere: asset::BoundingSphere { radius, center },
+            let tinytrace_asset::Mesh {
+                bounding_sphere: tinytrace_asset::BoundingSphere { radius, center },
                 vertex_offset,
                 index_offset,
                 material,
@@ -188,15 +187,20 @@ fn flatten_instance_tree(
     transform
 }
 
-fn texture_kind_format(kind: asset::TextureKind) -> ImageFormat {
+fn texture_kind_format(kind: tinytrace_asset::TextureKind) -> ImageFormat {
     match kind {
-        asset::TextureKind::Albedo => ImageFormat::RgbaBc1Srgb,
-        asset::TextureKind::Normal | asset::TextureKind::Specular => ImageFormat::RgBc5Unorm,
-        asset::TextureKind::Emissive => ImageFormat::RgbBc1Srgb,
+        tinytrace_asset::TextureKind::Albedo => ImageFormat::RgbaBc1Srgb,
+        tinytrace_asset::TextureKind::Normal | tinytrace_asset::TextureKind::Specular => {
+            ImageFormat::RgBc5Unorm
+        }
+        tinytrace_asset::TextureKind::Emissive => ImageFormat::RgbBc1Srgb,
     }
 }
 
-fn create_buffer<T>(context: &mut Context, data: &[T]) -> Result<Handle<Buffer>, backend::Error> {
+fn create_buffer<T>(
+    context: &mut Context,
+    data: &[T],
+) -> Result<Handle<Buffer>, tinytrace_backend::Error> {
     context.create_buffer(
         Lifetime::Scene,
         &BufferRequest {
@@ -219,8 +223,8 @@ fn scene_buffer_write<'a, T: bytemuck::NoUninit>(
 
 fn create_texture(
     context: &mut Context,
-    texture: &asset::Texture,
-) -> Result<Handle<Image>, backend::Error> {
+    texture: &tinytrace_asset::Texture,
+) -> Result<Handle<Image>, tinytrace_backend::Error> {
     context.create_image(
         Lifetime::Scene,
         &ImageRequest {
@@ -267,7 +271,7 @@ impl Instance {
 
     fn emissive_triangles<'a>(
         &'a self,
-        scene: &'a asset::Scene,
+        scene: &'a tinytrace_asset::Scene,
         instance_index: u32,
     ) -> impl Iterator<Item = EmissiveTriangle> + 'a {
         let mesh = &scene.meshes[self.mesh as usize];

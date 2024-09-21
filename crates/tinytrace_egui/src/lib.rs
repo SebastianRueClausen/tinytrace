@@ -2,13 +2,10 @@ use std::{borrow::Cow, mem};
 
 use ash::vk;
 use glam::{UVec2, Vec2};
-use tinytrace::{
-    backend::{
-        Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Error,
-        Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation, Sampler,
-        SamplerRequest, Shader, ShaderRequest,
-    },
-    binding,
+use tinytrace_backend::{
+    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Error,
+    Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation, Sampler,
+    SamplerRequest, Shader, ShaderRequest,
 };
 
 #[repr(C)]

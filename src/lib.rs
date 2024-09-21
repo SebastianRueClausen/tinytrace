@@ -3,8 +3,6 @@
 #[cfg(test)]
 mod test;
 
-pub mod asset;
-pub mod backend;
 pub mod camera;
 pub mod config;
 pub mod error;
@@ -16,10 +14,6 @@ pub mod scene;
 use std::{mem, time::Duration};
 
 use ash::vk;
-use backend::{
-    Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
-    ImageRequest, Lifetime, MemoryLocation,
-};
 pub use camera::{Camera, CameraMove};
 pub use config::{Config, LightSampling, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
@@ -29,6 +23,10 @@ use integrate::Integrator;
 use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use scene::Scene;
+use tinytrace_backend::{
+    Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
+    ImageRequest, Lifetime, MemoryLocation,
+};
 
 pub struct Renderer {
     pub context: Context,
@@ -48,7 +46,7 @@ impl Renderer {
         window: Option<(RawWindowHandle, RawDisplayHandle)>,
         extent: vk::Extent2D,
     ) -> Result<Self, Error> {
-        let scene = asset::Scene::default();
+        let scene = tinytrace_asset::Scene::default();
         let mut context = Context::new(window)?;
         context.add_include("constants", include_str!("includes/constants.glsl").into());
         context.add_include(
@@ -98,7 +96,7 @@ impl Renderer {
         })
     }
 
-    pub fn set_scene(&mut self, scene: &asset::Scene) -> Result<(), Error> {
+    pub fn set_scene(&mut self, scene: &tinytrace_asset::Scene) -> Result<(), Error> {
         self.context
             .clear_resources_with_lifetime(Lifetime::Scene)?;
         self.scene = Scene::new(&mut self.context, scene)?;
@@ -225,7 +223,7 @@ impl Renderer {
 fn create_render_target(
     context: &mut Context,
     extent: vk::Extent2D,
-) -> Result<Handle<Image>, backend::Error> {
+) -> Result<Handle<Image>, tinytrace_backend::Error> {
     context.create_image(
         Lifetime::Surface,
         &ImageRequest {

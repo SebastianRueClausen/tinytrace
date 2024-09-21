@@ -2,7 +2,7 @@ mod copy;
 mod shader;
 mod timing;
 
-use crate::backend::*;
+use crate::*;
 
 fn create_test_buffer(context: &mut Context, size: vk::DeviceSize) -> Handle<Buffer> {
     context

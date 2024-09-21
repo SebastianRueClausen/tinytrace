@@ -10,21 +10,34 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tinytrace::camera::{Camera, CameraMove};
 use tinytrace::config::LightSampling;
 use tinytrace::error::ErrorKind;
-use tinytrace::{asset, backend, Renderer, RestirReplay, SampleStrategy, Timings};
+use tinytrace::{Renderer, RestirReplay, SampleStrategy, Timings};
+use tinytrace_backend::{Context, Handle, Image};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-struct App {
+pub struct Viewer {
     render_state: Option<RenderState>,
     scene_controller: SceneController,
 }
 
-impl ApplicationHandler for App {
+impl Viewer {
+    pub fn new(scene: tinytrace_asset::Scene) -> Self {
+        Self {
+            render_state: None,
+            scene_controller: SceneController {
+                scene,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl ApplicationHandler for Viewer {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         event_loop.set_control_flow(ControlFlow::Poll);
         let window = event_loop
@@ -157,7 +170,7 @@ impl RenderState {
     }
 
     fn handle_error(&mut self, error: &tinytrace::Error) {
-        if let ErrorKind::Backend(backend::Error::SurfaceOutdated) = error.kind {
+        if let ErrorKind::Backend(tinytrace_backend::Error::SurfaceOutdated) = error.kind {
             self.handle_resize(self.window.inner_size());
         } else {
             panic!("unexpected error: {error}")
@@ -193,7 +206,7 @@ impl RenderState {
 
     fn render_gui(
         &mut self,
-        render_target: &backend::Handle<backend::Image>,
+        render_target: &Handle<Image>,
         egui_output: egui::FullOutput,
     ) -> Result<(), tinytrace::Error> {
         let pixels_per_point = self.gui.egui_context.pixels_per_point();
@@ -220,10 +233,7 @@ struct Gui {
 }
 
 impl Gui {
-    fn new(
-        context: &mut backend::Context,
-        event_loop: &ActiveEventLoop,
-    ) -> Result<Self, tinytrace::Error> {
+    fn new(context: &mut Context, event_loop: &ActiveEventLoop) -> Result<Self, tinytrace::Error> {
         let egui_context = egui::Context::default();
         let viewport_id = egui_context.viewport_id();
         Ok(Self {
@@ -263,7 +273,7 @@ enum SceneLoad {
     Loaded(PathBuf),
     Error(String),
     Loading {
-        thread: thread::JoinHandle<Result<asset::Scene, asset::Error>>,
+        thread: thread::JoinHandle<Result<tinytrace_asset::Scene, tinytrace_asset::Error>>,
         path: PathBuf,
     },
 }
@@ -272,7 +282,7 @@ impl SceneLoad {
     fn start_loading(&mut self, path: PathBuf) {
         *self = Self::Loading {
             path: path.clone(),
-            thread: thread::spawn(move || asset::Scene::from_gltf(&path)),
+            thread: thread::spawn(move || tinytrace_asset::Scene::from_gltf(&path)),
         };
     }
 
@@ -294,7 +304,7 @@ impl SceneLoad {
         };
     }
 
-    fn update(&mut self) -> Option<asset::Scene> {
+    fn update(&mut self) -> Option<tinytrace_asset::Scene> {
         match mem::take(self) {
             Self::Loading { thread, path } if thread.is_finished() => {
                 match thread.join().unwrap() {
@@ -320,7 +330,7 @@ impl SceneLoad {
 struct SceneController {
     path: String,
     load: SceneLoad,
-    scene: asset::Scene,
+    scene: tinytrace_asset::Scene,
 }
 
 impl SceneController {
@@ -571,17 +581,4 @@ impl Default for CameraController {
             drag: 8.0,
         }
     }
-}
-
-fn main() {
-    let scene = tinytrace::asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
-    let mut app = App {
-        render_state: None,
-        scene_controller: SceneController {
-            scene,
-            ..Default::default()
-        },
-    };
-    let event_loop = EventLoop::new().unwrap();
-    event_loop.run_app(&mut app).unwrap();
 }

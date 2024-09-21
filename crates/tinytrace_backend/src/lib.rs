@@ -44,8 +44,8 @@ pub use handle::Handle;
 use instance::Instance;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 pub use resource::{
-    Allocator, Blas, Buffer, BufferRequest, BufferType, Image, ImageFormat, ImageRequest,
-    MemoryLocation, Sampler, SamplerRequest, Tlas,
+    Allocator, Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Image,
+    ImageFormat, ImageRequest, MemoryLocation, Sampler, SamplerRequest, Tlas, TlasInstance,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};

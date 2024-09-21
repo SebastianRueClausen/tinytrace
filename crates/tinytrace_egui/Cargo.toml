@@ -9,4 +9,4 @@ bytemuck = { version = "1.16.3", features = ["derive"] }
 egui = { git = "https://github.com/emilk/egui.git", features = ["bytemuck"] }
 epaint = { git = "https://github.com/emilk/egui.git" }
 glam = { version = "0.28.0", features = ["bytemuck"] }
-tinytrace = { path = ".." }
+tinytrace_backend = { path = "../tinytrace_backend" }

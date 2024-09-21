@@ -27,12 +27,10 @@ impl Camera {
     pub const UP: Vec3 = Vec3::Y;
 
     pub fn forward(&self) -> Vec3 {
-        Vec3::new(
-            f32::cos(self.yaw) * f32::cos(self.pitch),
-            f32::sin(self.pitch),
-            f32::sin(self.yaw) * f32::cos(self.pitch),
-        )
-        .normalize()
+        let x = f32::cos(self.yaw) * f32::cos(self.pitch);
+        let y = f32::sin(self.pitch);
+        let z = f32::sin(self.yaw) * f32::cos(self.pitch);
+        Vec3::new(x, y, z).normalize()
     }
 
     pub fn right(&self) -> Vec3 {

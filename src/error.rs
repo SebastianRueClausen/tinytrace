@@ -32,5 +32,3 @@ impl<T: Into<ErrorKind>> From<T> for Error {
         }
     }
 }
-
-pub type Result<T> = std::result::Result<T, Error>;

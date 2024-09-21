@@ -3,9 +3,8 @@ use std::mem;
 use ash::vk;
 
 use crate::backend::{
-    Buffer, BufferRequest, BufferType, Context, Handle, Lifetime, MemoryLocation,
+    Buffer, BufferRequest, BufferType, Context, Error, Handle, Lifetime, MemoryLocation,
 };
-use crate::error::Result;
 
 pub(super) struct HashGrid {
     pub keys: Handle<Buffer>,
@@ -13,7 +12,7 @@ pub(super) struct HashGrid {
 }
 
 impl HashGrid {
-    pub fn new(context: &mut Context, layout: HashGridLayout) -> Result<Self> {
+    pub fn new(context: &mut Context, layout: HashGridLayout) -> Result<Self, Error> {
         let hashes = context.create_buffer(
             Lifetime::Renderer,
             &BufferRequest {
@@ -30,7 +29,7 @@ impl HashGrid {
         Ok(hash_grid)
     }
 
-    pub fn clear(&self, context: &mut Context) -> Result<()> {
+    pub fn clear(&self, context: &mut Context) -> Result<(), Error> {
         context.fill_buffer(&self.keys, u32::MAX)?;
         Ok(())
     }

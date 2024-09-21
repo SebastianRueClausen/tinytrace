@@ -1,17 +1,16 @@
 use ash::vk;
 
 use crate::backend::{
-    Binding, BindingType, Buffer, Context, Handle, Image, Lifetime, Shader, ShaderRequest,
+    Binding, BindingType, Buffer, Context, Error, Handle, Image, Lifetime, Shader, ShaderRequest,
 };
 use crate::binding;
-use crate::error::Result;
 
 pub struct PostProcess {
     display: Handle<Shader>,
 }
 
 impl PostProcess {
-    pub fn new(context: &mut Context) -> Result<Self> {
+    pub fn new(context: &mut Context) -> Result<Self, Error> {
         context.add_include("tonemap", include_str!("tonemap.glsl").to_string());
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
@@ -48,7 +47,7 @@ impl PostProcess {
         constants: &Handle<Buffer>,
         render_target: &Handle<Image>,
         swapchain: &Handle<Image>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         context
             .bind_shader(&self.display)
             .bind_buffer("constants", constants)

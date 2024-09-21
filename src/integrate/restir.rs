@@ -4,15 +4,12 @@ use ash::vk;
 use glam::Vec3;
 use half::f16;
 
-use crate::{
-    backend::{
-        self, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Handle, Lifetime,
-        MemoryLocation, Shader, ShaderRequest,
-    },
-    binding, error,
-    hash_grid::{HashGrid, HashGridLayout},
-    RestirConfig,
+use crate::backend::{
+    self, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Handle, Lifetime,
+    MemoryLocation, Shader, ShaderRequest,
 };
+use crate::hash_grid::{HashGrid, HashGridLayout};
+use crate::{binding, Error, RestirConfig};
 
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug)]
@@ -65,7 +62,7 @@ fn create_buffer(
 }
 
 impl RestirState {
-    pub fn new(context: &mut Context, config: &RestirConfig) -> error::Result<Self> {
+    pub fn new(context: &mut Context, config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
@@ -120,7 +117,7 @@ impl RestirState {
         &self,
         context: &mut Context,
         constants: &Handle<Buffer>,
-    ) -> error::Result<()> {
+    ) -> Result<(), Error> {
         context
             .bind_shader(&self.update_reservoirs)
             .bind_buffer("constants", constants)
@@ -133,8 +130,9 @@ impl RestirState {
         Ok(())
     }
 
-    pub fn clear_updates(&self, context: &mut Context) -> error::Result<()> {
+    pub fn clear_updates(&self, context: &mut Context) -> Result<(), Error> {
         context.fill_buffer(&self.update_counts, 0)?;
-        self.update_hash_grid.clear(context)
+        self.update_hash_grid.clear(context)?;
+        Ok(())
     }
 }

@@ -3,10 +3,8 @@ mod restir;
 use crate::backend::{
     Binding, BindingType, Buffer, Handle, Image, Lifetime, Shader, ShaderRequest,
 };
-use crate::error::Result;
 use crate::scene::Scene;
-use crate::Context;
-use crate::{binding, RestirConfig};
+use crate::{binding, Context, Error, RestirConfig};
 use ash::vk;
 use restir::RestirState;
 
@@ -16,7 +14,7 @@ pub struct Integrator {
 }
 
 impl Integrator {
-    pub fn new(context: &mut Context, restir_config: &RestirConfig) -> Result<Self> {
+    pub fn new(context: &mut Context, restir_config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(storage_buffer, Vertex, vertices, true, false),
@@ -66,7 +64,7 @@ impl Integrator {
         constants: &Handle<Buffer>,
         scene: &Scene,
         target: &Handle<Image>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         self.restir_state.clear_updates(context)?;
         context
             .bind_shader(&self.integrate)

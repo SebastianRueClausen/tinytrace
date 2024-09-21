@@ -2,10 +2,9 @@ mod restir;
 
 use crate::scene::Scene;
 use crate::{Context, Error, RestirConfig};
-use ash::vk;
 use restir::RestirState;
 use tinytrace_backend::{
-    binding, Binding, BindingType, Buffer, Handle, Image, Lifetime, Shader, ShaderRequest,
+    binding, Binding, BindingType, Buffer, Extent, Handle, Image, Lifetime, Shader, ShaderRequest,
 };
 
 pub struct Integrator {
@@ -49,7 +48,7 @@ impl Integrator {
             integrate: context.create_shader(
                 Lifetime::Renderer,
                 &ShaderRequest {
-                    block_size: vk::Extent2D::default().width(32).height(32),
+                    block_size: Extent::new(32, 32),
                     source: include_str!("integrate.glsl"),
                     push_constant_size: None,
                     bindings,
@@ -92,7 +91,7 @@ impl Integrator {
             .bind_sampled_images("textures", &scene.texture_sampler, &scene.textures)
             .bind_acceleration_structure("acceleration_structure", &scene.tlas)
             .bind_storage_image("target", target);
-        let vk::Extent3D { width, height, .. } = context.image(target).extent;
+        let Extent { width, height } = context.image(target).extent;
         context.dispatch(width, height)?;
         self.restir_state.update_reservoirs(context, constants)
     }

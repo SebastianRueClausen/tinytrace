@@ -107,6 +107,7 @@ impl Context {
         }
     }
 
+    // Register that resources are about to be accessed and insert pipeline barriers if required.
     pub(super) fn access_resources(
         &mut self,
         images: &[(Handle<Image>, Access)],

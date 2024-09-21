@@ -7,8 +7,8 @@ use half::f16;
 use crate::hash_grid::{HashGrid, HashGridLayout};
 use crate::{Error, RestirConfig};
 use tinytrace_backend::{
-    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Handle, Lifetime,
-    MemoryLocation, Shader, ShaderRequest,
+    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Extent, Handle,
+    Lifetime, MemoryLocation, Shader, ShaderRequest,
 };
 
 #[repr(C)]
@@ -74,7 +74,7 @@ impl RestirState {
         let update_reservoirs = context.create_shader(
             Lifetime::Renderer,
             &ShaderRequest {
-                block_size: vk::Extent2D::default().width(256).height(1),
+                block_size: Extent::new(256, 1),
                 source: include_str!("update_reservoirs.glsl"),
                 push_constant_size: None,
                 bindings,

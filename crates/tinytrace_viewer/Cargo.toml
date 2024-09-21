@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 glam = { version = "0.27.0", features = ["bytemuck"] }
-ash = "0.38.0"
 winit = { version = "0.30.5", features = ["rwh_06"] }
 egui = { git = "https://github.com/emilk/egui.git" }
 raw-window-handle = "0.6.1"

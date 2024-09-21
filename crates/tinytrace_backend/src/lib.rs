@@ -1,3 +1,4 @@
+#![warn(clippy::all)]
 //! # The backend tinytrace
 //!
 //! The Vulkan backend of tinytrace. It is written to both be a simple implementation and be
@@ -12,18 +13,18 @@
 //! * Manage descriptors.
 //! * Cleanup resources.
 
-pub mod command;
-pub mod copy;
+mod command;
+mod copy;
 mod device;
 mod error;
 mod glsl;
 mod handle;
 mod instance;
-pub mod resource;
+mod resource;
 mod shader;
 mod surface;
 mod sync;
-pub mod timing;
+mod timing;
 
 #[cfg(test)]
 mod test;
@@ -43,9 +44,11 @@ pub use error::Error;
 pub use handle::Handle;
 use instance::Instance;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use resource::Allocator;
 pub use resource::{
-    Allocator, Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Image,
-    ImageFormat, ImageRequest, MemoryLocation, Sampler, SamplerRequest, Tlas, TlasInstance,
+    Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Extent, Filter,
+    Image, ImageFormat, ImageRequest, MemoryLocation, Offset, Sampler, SamplerRequest, Tlas,
+    TlasInstance,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};
@@ -316,7 +319,7 @@ impl Context {
     }
 
     /// Executes all recorded commands. Returns the timestamp signaled when when done.
-    pub fn execute_commands(&mut self, present: bool) -> Result<u64, Error> {
+    fn execute_commands(&mut self, present: bool) -> Result<u64, Error> {
         let command_buffer = self.command_buffers.first_mut().unwrap();
         command_buffer.end(&self.device, self.sync.timestamp + 1)?;
 

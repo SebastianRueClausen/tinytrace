@@ -1,7 +1,5 @@
-use ash::vk;
-
 use tinytrace_backend::{
-    binding, Binding, BindingType, Buffer, Context, Error, Handle, Image, Lifetime, Shader,
+    binding, Binding, BindingType, Buffer, Context, Error, Extent, Handle, Image, Lifetime, Shader,
     ShaderRequest,
 };
 
@@ -32,7 +30,7 @@ impl PostProcess {
         let display = context.create_shader(
             Lifetime::Static,
             &ShaderRequest {
-                block_size: vk::Extent2D::default().width(32).height(32),
+                block_size: Extent::new(32, 32),
                 source: include_str!("display.glsl"),
                 push_constant_size: None,
                 bindings,
@@ -53,7 +51,7 @@ impl PostProcess {
             .bind_buffer("constants", constants)
             .bind_storage_image("render_target", render_target)
             .bind_storage_image("swapchain", swapchain);
-        let vk::Extent3D { width, height, .. } = context.image(swapchain).extent;
+        let Extent { width, height } = context.image(swapchain).extent;
         context.dispatch(width, height)?;
         Ok(())
     }

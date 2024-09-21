@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ash = "0.38.0"
 bytemuck = { version = "1.16.3", features = ["derive"] }
 egui = { git = "https://github.com/emilk/egui.git", features = ["bytemuck"] }
 epaint = { git = "https://github.com/emilk/egui.git" }

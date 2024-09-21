@@ -3,17 +3,16 @@
 #[cfg(test)]
 mod test;
 
-pub mod camera;
-pub mod config;
-pub mod error;
+mod camera;
+mod config;
+mod error;
 mod hash_grid;
 mod integrate;
 mod post_process;
-pub mod scene;
+mod scene;
 
 use std::{mem, time::Duration};
 
-use ash::vk;
 pub use camera::{Camera, CameraMove};
 pub use config::{Config, LightSampling, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
@@ -24,7 +23,7 @@ use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use scene::Scene;
 use tinytrace_backend::{
-    Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
+    Buffer, BufferRequest, BufferType, BufferWrite, Context, Extent, Handle, Image, ImageFormat,
     ImageRequest, Lifetime, MemoryLocation,
 };
 
@@ -36,7 +35,7 @@ pub struct Renderer {
     pub render_target: Handle<Image>,
     pub constants: Handle<Buffer>,
     pub camera: Camera,
-    pub extent: vk::Extent2D,
+    pub extent: Extent,
     pub accumulated_frame_count: u32,
     pub config: Config,
 }
@@ -44,7 +43,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(
         window: Option<(RawWindowHandle, RawDisplayHandle)>,
-        extent: vk::Extent2D,
+        extent: Extent,
     ) -> Result<Self, Error> {
         let scene = tinytrace_asset::Scene::default();
         let mut context = Context::new(window)?;
@@ -70,7 +69,7 @@ impl Renderer {
         let constants = context.create_buffer(
             Lifetime::Static,
             &BufferRequest {
-                size: mem::size_of::<Constants>() as vk::DeviceSize,
+                size: mem::size_of::<Constants>() as u64,
                 memory_location: MemoryLocation::Device,
                 ty: BufferType::Uniform,
             },
@@ -120,7 +119,7 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn resize(&mut self, extent: vk::Extent2D) -> Result<(), Error> {
+    pub fn resize(&mut self, extent: Extent) -> Result<(), Error> {
         self.context.resize_surface()?;
         self.render_target = create_render_target(&mut self.context, extent)?;
         self.extent = extent;
@@ -222,7 +221,7 @@ impl Renderer {
 
 fn create_render_target(
     context: &mut Context,
-    extent: vk::Extent2D,
+    extent: Extent,
 ) -> Result<Handle<Image>, tinytrace_backend::Error> {
     context.create_image(
         Lifetime::Surface,
@@ -230,11 +229,7 @@ fn create_render_target(
             memory_location: MemoryLocation::Device,
             format: RENDER_TARGET_FORMAT,
             mip_level_count: 1,
-            extent: vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
-                depth: 1,
-            },
+            extent,
         },
     )
 }

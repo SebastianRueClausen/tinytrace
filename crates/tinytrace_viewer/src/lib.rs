@@ -1,17 +1,18 @@
+#![warn(clippy::all)]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::{mem, thread};
 
-use ash::vk;
 use bit_set::BitSet;
 use egui::RichText;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use tinytrace::camera::{Camera, CameraMove};
-use tinytrace::config::LightSampling;
-use tinytrace::error::ErrorKind;
+pub use tinytrace::Error;
+use tinytrace::LightSampling;
+use tinytrace::{Camera, CameraMove};
 use tinytrace::{Renderer, RestirReplay, SampleStrategy, Timings};
-use tinytrace_backend::{Context, Handle, Image};
+use tinytrace_backend::{Context, Extent, Handle, Image};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -43,9 +44,10 @@ impl ApplicationHandler for Viewer {
         let window = event_loop
             .create_window(Window::default_attributes())
             .unwrap();
-        let extent = vk::Extent2D::default()
-            .width(window.inner_size().width)
-            .height(window.inner_size().height);
+        let extent = Extent {
+            width: window.inner_size().width,
+            height: window.inner_size().height,
+        };
         let window_handles = Some((
             window.window_handle().unwrap().as_raw(),
             window.display_handle().unwrap().as_raw(),
@@ -53,7 +55,7 @@ impl ApplicationHandler for Viewer {
         let mut renderer = Renderer::new(window_handles, extent).unwrap();
         renderer.set_scene(&self.scene_controller.scene).unwrap();
         self.render_state = Some(RenderState {
-            gui: Gui::new(&mut renderer.context, event_loop).unwrap().into(),
+            gui: Gui::new(&mut renderer.context, event_loop).unwrap(),
             camera_controller: CameraController::default(),
             renderer_controller: RendererController::default(),
             last_update: Instant::now(),
@@ -102,7 +104,7 @@ impl RenderState {
         let response = self
             .gui
             .egui_winit_state
-            .on_window_event(&self.window, &event);
+            .on_window_event(&self.window, event);
         if response.consumed {
             return;
         }
@@ -162,15 +164,12 @@ impl RenderState {
 
     fn handle_resize(&mut self, size: PhysicalSize<u32>) {
         self.renderer
-            .resize(vk::Extent2D {
-                width: size.width,
-                height: size.height,
-            })
+            .resize(Extent::new(size.width, size.height))
             .unwrap();
     }
 
     fn handle_error(&mut self, error: &tinytrace::Error) {
-        if let ErrorKind::Backend(tinytrace_backend::Error::SurfaceOutdated) = error.kind {
+        if let Error::Backend(tinytrace_backend::Error::SurfaceOutdated) = error {
             self.handle_resize(self.window.inner_size());
         } else {
             panic!("unexpected error: {error}")
@@ -282,7 +281,7 @@ impl SceneLoad {
     fn start_loading(&mut self, path: PathBuf) {
         *self = Self::Loading {
             path: path.clone(),
-            thread: thread::spawn(move || tinytrace_asset::Scene::from_gltf(&path)),
+            thread: thread::spawn(move || tinytrace_asset::Scene::from_gltf(path)),
         };
     }
 

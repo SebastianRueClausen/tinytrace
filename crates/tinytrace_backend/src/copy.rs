@@ -1,4 +1,6 @@
-use super::{resource, sync::Access, Buffer, Context, Error, Handle, Image, Lifetime};
+use crate::{Extent, Offset};
+
+use super::{sync::Access, Buffer, Context, Error, Handle, Image, Lifetime};
 use ash::vk;
 
 use std::borrow::Cow;
@@ -13,9 +15,13 @@ pub struct BufferWrite<'a> {
 #[derive(Debug)]
 pub struct ImageWrite<'a> {
     pub image: Handle<Image>,
-    pub offset: vk::Offset3D,
-    pub extent: vk::Extent3D,
+    pub offset: Offset,
+    pub extent: Extent,
     // FIXME: This is kind of an annoying type.
+    /// The data written to the mips of the image. If the image has a block compressed format,
+    /// then it's assumed that the data layout is aligned to the dimensions of the blocks.
+    /// For instance, if the width of a mip is 17 and image format has blocks with a width of
+    /// 4, then it's assumed that width of the rows in memory is 20.
     pub mips: Cow<'a, [Box<[u8]>]>,
 }
 
@@ -30,9 +36,9 @@ fn buffer_image_copy(
     aspect: vk::ImageAspectFlags,
     level: u32,
     buffer_offset: vk::DeviceSize,
-    offset: vk::Offset3D,
-    extent: vk::Extent3D,
-    block_extent: vk::Extent2D,
+    offset: Offset,
+    extent: Extent,
+    block_extent: Extent,
 ) -> vk::BufferImageCopy {
     let subresource = vk::ImageSubresourceLayers::default()
         .aspect_mask(aspect)
@@ -41,14 +47,16 @@ fn buffer_image_copy(
         .mip_level(level);
     vk::BufferImageCopy::default()
         .buffer_offset(buffer_offset)
-        .image_extent(extent)
-        .image_offset(offset)
+        .image_extent(extent.into())
+        .image_offset(offset.into())
         .buffer_row_length(extent.width.next_multiple_of(block_extent.width))
         .buffer_image_height(extent.height.next_multiple_of(block_extent.height))
         .image_subresource(subresource)
 }
 
 impl Context {
+    /// Write data to buffers. The data is first written to staging buffers before being copied
+    /// to the actual buffers.
     pub fn write_buffers(&mut self, writes: &[BufferWrite]) -> Result<&mut Self, Error> {
         let buffer_accesses: Vec<_> = writes
             .iter()
@@ -87,6 +95,8 @@ impl Context {
         Ok(self)
     }
 
+    /// Write data to images. The data is first written to staging buffers before being copied
+    /// images.
     pub fn write_images(&mut self, writes: &[ImageWrite]) -> Result<&mut Self, Error> {
         let image_accesses: Vec<_> = writes
             .iter()
@@ -119,8 +129,8 @@ impl Context {
             .iter()
             .flat_map(|write| {
                 write.mips.iter().enumerate().map(move |(level, data)| {
-                    let offset = resource::mip_level_offset(write.offset, level as u32);
-                    let extent = resource::mip_level_extent(write.extent, level as u32);
+                    let offset = write.offset.mip_level(level as u32);
+                    let extent = write.extent.mip_level(level as u32);
                     (write.image.clone(), extent, offset, data, level as u32)
                 })
             })
@@ -166,7 +176,7 @@ impl Context {
 
     /// Download data from buffers and images.
     ///
-    /// The memory of images with multiple mips is densely packed. Note that this ends the frame.
+    /// The memory of images with multiple mips is densely packed. This executes all pending commands.
     pub fn download(
         &mut self,
         buffers: &[Handle<Buffer>],
@@ -214,8 +224,8 @@ impl Context {
                         image.format.aspect(),
                         level,
                         buffer_offset,
-                        vk::Offset3D::default(),
-                        resource::mip_level_extent(image.extent, level),
+                        Offset::default(),
+                        image.extent.mip_level(level),
                         block_extent,
                     )
                 })
@@ -256,7 +266,7 @@ impl Context {
 
         self.execute_commands(false)?;
 
-        // TODO: It's not necessary to wait for idle here.
+        // TODO: This is not optimal.
         self.device.wait_until_idle()?;
 
         // Copy data from scratch memory.

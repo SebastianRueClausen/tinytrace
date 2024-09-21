@@ -1,7 +1,22 @@
+//! # The shader system
+//!
+//! Shaders are handled somewhat untradictionally compared to other renderes. First of all, only
+//! compute shaders are supported. This simplifies the whole system quite a bit. Secondly, instead
+//! of declaring shader bindings in the shaders themselves, they are declared in Rust and inserted
+//! where `#include "<bindings>"` is in the GLSL source code. This is in some sense the reverse of
+//! the more usual shader reflections, where the bindings are obtained by parsing the intermediate
+//! representation instead. This also removes the busy work of managing binding indices. Resources
+//! are bound their their names instead. Lastly, all descriptors are managed through descriptor
+//! buffers instead of the classic descriptor sets. Descriptor buffers are arguably simpler than
+//! descriptor sets (but perhaps harder to debug). Binding a resource only involves a memcpy into
+//! a preallocated buffer, which makes it very fast.
+
 use std::collections::HashMap;
 use std::{mem, ops, slice};
 
 use ash::vk;
+
+use crate::Extent;
 
 use super::command::CommandBuffer;
 use super::device::Device;
@@ -209,7 +224,7 @@ pub(super) struct BoundShader {
     bound: HashMap<&'static str, BoundResource>,
     /// `true` if this shader wast just dispatched.
     has_been_dispatched: bool,
-    /// `true` if push constants has been pushed.
+    /// `true` if push constants have been pushed.
     constants_has_been_pushed: bool,
 }
 
@@ -363,12 +378,12 @@ impl DescriptorBuffer {
 
 #[derive(Debug)]
 pub struct Shader {
-    pub pipeline: vk::Pipeline,
-    pub layout: vk::PipelineLayout,
-    pub descriptor_layout: vk::DescriptorSetLayout,
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    descriptor_layout: vk::DescriptorSetLayout,
     bindings: HashMap<&'static str, ShaderBinding>,
     push_constant_size: Option<u32>,
-    pub block_size: vk::Extent2D,
+    block_size: Extent,
 }
 
 impl Shader {
@@ -406,7 +421,7 @@ fn create_pipeline_layout(
 
 pub struct ShaderRequest<'a> {
     pub source: &'a str,
-    pub block_size: vk::Extent2D,
+    pub block_size: Extent,
     pub bindings: &'a [Binding],
     pub push_constant_size: Option<u32>,
 }
@@ -429,7 +444,7 @@ impl Context {
                 content,
             })
         });
-        let vk::Extent2D { width, height } = request.block_size;
+        let Extent { width, height } = request.block_size;
         let source = render_shader(width, height, request.source);
         let shader_kind = shaderc::ShaderKind::Compute;
         let output = compiler
@@ -533,6 +548,7 @@ impl Context {
         shader.bindings.get(name).unwrap_or_else(error)
     }
 
+    /// Push constants to the currently bound shader.
     pub fn push_constant(&mut self, constant: &impl bytemuck::NoUninit) -> &mut Self {
         let shader = self.shader(&self.bound_shader().shader);
         let bytes = bytemuck::bytes_of(constant);
@@ -551,7 +567,7 @@ impl Context {
         self
     }
 
-    pub fn bind_images(
+    fn bind_images(
         &mut self,
         name: &'static str,
         sampler: Option<&Handle<Sampler>>,
@@ -576,6 +592,7 @@ impl Context {
         self
     }
 
+    /// Bind array of storage images to the currently bound shader.
     pub fn bind_storage_images(
         &mut self,
         name: &'static str,
@@ -585,6 +602,7 @@ impl Context {
         self
     }
 
+    /// Bind array of sampled images to the currently bound shader.
     pub fn bind_sampled_images(
         &mut self,
         name: &'static str,
@@ -594,10 +612,12 @@ impl Context {
         self.bind_images(name, Some(sampler), images)
     }
 
+    /// Bind a single storage image to the currently bound shader.
     pub fn bind_storage_image(&mut self, name: &'static str, image: &Handle<Image>) -> &mut Self {
         self.bind_storage_images(name, &[image.clone()])
     }
 
+    /// Bind a single sampled image to the currently bound shader.
     pub fn bind_sampled_image(
         &mut self,
         name: &'static str,
@@ -607,6 +627,7 @@ impl Context {
         self.bind_sampled_images(name, sampler, &[image.clone()]);
     }
 
+    /// Bind buffer to the currently bound shader.
     pub fn bind_buffer(&mut self, name: &'static str, buffer: &Handle<Buffer>) -> &mut Self {
         let binding = *self.binding(name);
         let duplicate_descriptor =
@@ -620,6 +641,7 @@ impl Context {
         self
     }
 
+    /// Bind (TLAS) top level acceleration structure to the currently bound shader.
     pub fn bind_acceleration_structure(
         &mut self,
         name: &'static str,
@@ -656,7 +678,8 @@ impl Context {
         }
     }
 
-    /// Dispatch bound shader with `width` * `height` threads.
+    /// Dispatch bound shader with `width` * `height` threads. The actual number of threads
+    /// launched is the next multiple of the block extent.
     pub fn dispatch(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
         self.bound_shader_mut().has_been_dispatched = true;
 

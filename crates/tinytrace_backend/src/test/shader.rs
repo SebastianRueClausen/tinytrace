@@ -1,7 +1,5 @@
 use std::{borrow::Cow, mem};
 
-use ash::vk;
-
 use crate::*;
 
 fn create_storage_buffer(context: &mut Context) -> Handle<Buffer> {
@@ -56,7 +54,7 @@ fn compute_shader() {
         .create_shader(
             Lifetime::Static,
             &ShaderRequest {
-                block_size: vk::Extent2D::default().width(256).height(1),
+                block_size: Extent::new(256, 1),
                 source: include_str!("copy_buffer.glsl"),
                 push_constant_size: None,
                 bindings,
@@ -100,7 +98,7 @@ fn push_constant() {
         .create_shader(
             Lifetime::Static,
             &ShaderRequest {
-                block_size: vk::Extent2D::default().width(256).height(1),
+                block_size: Extent::new(256, 1),
                 source: include_str!("push_constant.glsl"),
                 push_constant_size: Some(mem::size_of::<u32>() as u32),
                 bindings,

@@ -8,6 +8,72 @@ use super::sync::Access;
 use super::Error;
 use super::{BufferWrite, Context, Handle, Lifetime};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Extent {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Extent {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    pub fn mip_level(self, level: u32) -> Self {
+        Self {
+            width: self.width >> level,
+            height: self.height >> level,
+        }
+    }
+}
+
+impl From<Extent> for vk::Extent2D {
+    fn from(Extent { width, height }: Extent) -> Self {
+        Self { width, height }
+    }
+}
+
+impl From<Extent> for vk::Extent3D {
+    fn from(Extent { width, height }: Extent) -> Self {
+        Self {
+            width,
+            height,
+            depth: 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Offset {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Offset {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    pub fn mip_level(self, level: u32) -> Self {
+        Self {
+            x: self.x >> level,
+            y: self.y >> level,
+        }
+    }
+}
+
+impl From<Offset> for vk::Offset2D {
+    fn from(Offset { x, y }: Offset) -> Self {
+        Self { x, y }
+    }
+}
+
+impl From<Offset> for vk::Offset3D {
+    fn from(Offset { x, y }: Offset) -> Self {
+        Self { x, y, z: 0 }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BufferType {
     Uniform,
@@ -136,12 +202,12 @@ pub enum ImageFormat {
 }
 
 pub struct FormatInfo {
-    pub block_extent: vk::Extent2D,
+    pub block_extent: Extent,
     pub bytes_per_block: vk::DeviceSize,
 }
 
 impl FormatInfo {
-    fn new(block_extent: vk::Extent2D, bytes_per_block: vk::DeviceSize) -> Self {
+    fn new(block_extent: Extent, bytes_per_block: vk::DeviceSize) -> Self {
         Self {
             block_extent,
             bytes_per_block,
@@ -159,13 +225,11 @@ impl ImageFormat {
     pub fn info(self) -> FormatInfo {
         match self {
             Self::Rgba8Srgb | Self::Rgba8Unorm | Self::Bgra8Unorm => {
-                FormatInfo::new(vk::Extent2D::default().width(1).height(1), 4)
+                FormatInfo::new(Extent::new(1, 1), 4)
             }
-            Self::Rgba32Float => FormatInfo::new(vk::Extent2D::default().width(1).height(1), 16),
-            Self::RgBc5Unorm => FormatInfo::new(vk::Extent2D::default().width(4).height(4), 16),
-            Self::RgbBc1Srgb | Self::RgbaBc1Srgb => {
-                FormatInfo::new(vk::Extent2D::default().width(4).height(4), 8)
-            }
+            Self::Rgba32Float => FormatInfo::new(Extent::new(1, 1), 16),
+            Self::RgBc5Unorm => FormatInfo::new(Extent::new(4, 4), 16),
+            Self::RgbBc1Srgb | Self::RgbaBc1Srgb => FormatInfo::new(Extent::new(4, 4), 8),
         }
     }
 
@@ -176,7 +240,7 @@ impl ImageFormat {
 
 #[derive(Debug, Clone)]
 pub struct ImageRequest {
-    pub extent: vk::Extent3D,
+    pub extent: Extent,
     pub format: ImageFormat,
     pub mip_level_count: u32,
     pub memory_location: MemoryLocation,
@@ -186,7 +250,7 @@ pub struct ImageRequest {
 pub struct Image {
     pub image: vk::Image,
     pub view: vk::ImageView,
-    pub extent: vk::Extent3D,
+    pub extent: Extent,
     pub format: ImageFormat,
     pub mip_level_count: u32,
     pub swapchain_index: Option<u32>,
@@ -212,7 +276,7 @@ impl Context {
         }
         let image_info = vk::ImageCreateInfo::default()
             .format(request.format.into())
-            .extent(request.extent)
+            .extent(request.extent.into())
             .mip_levels(request.mip_level_count)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -247,7 +311,7 @@ impl Context {
 
 impl Image {
     pub fn mip_byte_size(&self, level: u32) -> vk::DeviceSize {
-        let extent = mip_level_extent(self.extent, level);
+        let extent = self.extent.mip_level(level);
         let FormatInfo {
             block_extent,
             bytes_per_block,
@@ -272,22 +336,6 @@ impl Image {
         unsafe {
             device.destroy_image_view(self.view, None);
         };
-    }
-}
-
-pub fn mip_level_extent(extent: vk::Extent3D, level: u32) -> vk::Extent3D {
-    vk::Extent3D {
-        width: extent.width >> level,
-        height: extent.height >> level,
-        depth: extent.depth,
-    }
-}
-
-pub fn mip_level_offset(offset: vk::Offset3D, level: u32) -> vk::Offset3D {
-    vk::Offset3D {
-        x: offset.x >> level,
-        y: offset.y >> level,
-        z: offset.z,
     }
 }
 
@@ -351,11 +399,7 @@ pub struct MemoryBlock {
 }
 
 impl MemoryBlock {
-    pub fn new(
-        device: &Device,
-        size: vk::DeviceSize,
-        memory_type_index: u32,
-    ) -> Result<Self, Error> {
+    fn new(device: &Device, size: vk::DeviceSize, memory_type_index: u32) -> Result<Self, Error> {
         let mut allocate_flags_info =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let allocation_info = vk::MemoryAllocateInfo::default()
@@ -385,15 +429,10 @@ impl MemoryBlock {
         Some(start)
     }
 
-    pub fn destroy(&self, device: &Device) {
+    fn destroy(&self, device: &Device) {
         unsafe {
             device.free_memory(self.memory, None);
         }
-    }
-
-    pub fn map(&self, device: &Device) -> Result<*mut u8, Error> {
-        let flags = vk::MemoryMapFlags::empty();
-        Ok(unsafe { device.map_memory(self.memory, 0, vk::WHOLE_SIZE, flags)? as *mut u8 })
     }
 }
 
@@ -480,11 +519,24 @@ impl Allocator {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum Filter {
+    #[default]
+    Linear = vk::Filter::LINEAR.as_raw() as isize,
+    Nearest = vk::Filter::NEAREST.as_raw() as isize,
+}
+
+impl From<Filter> for vk::Filter {
+    fn from(filter: Filter) -> Self {
+        Self::from_raw(filter as i32)
+    }
+}
+
 #[derive(Default)]
 pub struct SamplerRequest {
-    pub filter: vk::Filter,
+    pub filter: Filter,
     pub max_anisotropy: Option<f32>,
-    pub address_mode: vk::SamplerAddressMode,
+    pub clamp_to_edge: bool,
 }
 
 #[derive(Debug)]
@@ -494,12 +546,16 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self, Error> {
+        let address_mode = match request.clamp_to_edge {
+            true => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            false => vk::SamplerAddressMode::REPEAT,
+        };
         let create_info = vk::SamplerCreateInfo::default()
-            .mag_filter(request.filter)
-            .min_filter(request.filter)
-            .address_mode_u(request.address_mode)
-            .address_mode_v(request.address_mode)
-            .address_mode_w(request.address_mode)
+            .mag_filter(request.filter.into())
+            .min_filter(request.filter.into())
+            .address_mode_u(address_mode)
+            .address_mode_v(address_mode)
+            .address_mode_w(address_mode)
             .max_anisotropy(request.max_anisotropy.unwrap_or_default())
             .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
             .compare_op(vk::CompareOp::ALWAYS)

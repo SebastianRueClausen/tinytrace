@@ -8,8 +8,8 @@ use half::f16;
 use crate::Error;
 use tinytrace_backend::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, BufferWrite,
-    Context, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation,
-    Sampler, SamplerRequest, Tlas, TlasInstance,
+    Context, Extent, Filter, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime,
+    MemoryLocation, Offset, Sampler, SamplerRequest, Tlas, TlasInstance,
 };
 
 pub struct Scene {
@@ -70,7 +70,7 @@ impl Scene {
             .iter()
             .zip(textures.iter())
             .map(|(texture, image)| ImageWrite {
-                offset: vk::Offset3D::default(),
+                offset: Offset::default(),
                 extent: context.image(image).extent,
                 image: image.clone(),
                 mips: Cow::Borrowed(&texture.mips),
@@ -81,9 +81,9 @@ impl Scene {
         let texture_sampler = context.create_sampler(
             Lifetime::Scene,
             &SamplerRequest {
-                address_mode: vk::SamplerAddressMode::REPEAT,
-                filter: vk::Filter::LINEAR,
+                filter: Filter::Linear,
                 max_anisotropy: Some(16.0),
+                clamp_to_edge: false,
             },
         )?;
 
@@ -228,10 +228,7 @@ fn create_texture(
     context.create_image(
         Lifetime::Scene,
         &ImageRequest {
-            extent: vk::Extent3D::default()
-                .width(texture.width)
-                .height(texture.height)
-                .depth(1),
+            extent: Extent::new(texture.width, texture.height),
             format: texture_kind_format(texture.kind),
             mip_level_count: texture.mips.len() as u32,
             memory_location: MemoryLocation::Device,

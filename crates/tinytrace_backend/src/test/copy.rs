@@ -1,7 +1,5 @@
 use std::borrow::Cow;
 
-use ash::vk;
-
 use super::create_test_buffer;
 use crate::*;
 
@@ -13,7 +11,7 @@ fn random_bytes(count: usize) -> Box<[u8]> {
 fn transfer() {
     let mut context = Context::new(None).unwrap();
     let buffer = create_test_buffer(&mut context, 1024);
-    let extent = vk::Extent3D::default().width(32).height(32).depth(1);
+    let extent = Extent::new(32, 32);
     let image = context
         .create_image(
             Lifetime::Frame,
@@ -35,7 +33,7 @@ fn transfer() {
         .unwrap()
         .write_images(&[ImageWrite {
             image: image.clone(),
-            offset: vk::Offset3D::default(),
+            offset: Offset::default(),
             extent,
             mips: Cow::Borrowed(&[image_data.clone()]),
         }])
@@ -49,7 +47,7 @@ fn transfer() {
 #[test]
 fn transfer_image_mips() {
     let mut context = Context::new(None).unwrap();
-    let extent = vk::Extent3D::default().width(32).height(32).depth(1);
+    let extent = Extent::new(32, 32);
     let image = context
         .create_image(
             Lifetime::Frame,
@@ -68,7 +66,7 @@ fn transfer_image_mips() {
     let download = context
         .write_images(&[ImageWrite {
             image: image.clone(),
-            offset: vk::Offset3D::default(),
+            offset: Offset::default(),
             extent,
             mips: (&mips.clone()).into(),
         }])
@@ -83,10 +81,7 @@ fn transfer_image_mips() {
 #[test]
 fn odd_sized_images() {
     let mut context = Context::new(None).unwrap();
-
-    let a_extent = vk::Extent3D::default().width(83).height(47).depth(1);
-    let b_extent = vk::Extent3D::default().width(97).height(59).depth(1);
-
+    let (a_extent, b_extent) = (Extent::new(83, 47), Extent::new(97, 59));
     let a = context
         .create_image(
             Lifetime::Frame,
@@ -109,21 +104,19 @@ fn odd_sized_images() {
             },
         )
         .unwrap();
-
     let a_bytes = random_bytes((a_extent.width * a_extent.height * 4) as usize);
     let b_bytes = random_bytes((b_extent.width * b_extent.height * 4) as usize);
-
     let download = context
         .write_images(&[ImageWrite {
             image: a.clone(),
-            offset: vk::Offset3D::default(),
+            offset: Offset::default(),
             extent: a_extent,
             mips: Cow::Borrowed(&[a_bytes.clone()]),
         }])
         .unwrap()
         .write_images(&[ImageWrite {
             image: b.clone(),
-            offset: vk::Offset3D::default(),
+            offset: Offset::default(),
             extent: b_extent,
             mips: Cow::Borrowed(&[b_bytes.clone()]),
         }])
@@ -163,18 +156,7 @@ fn odd_sized_buffers() {
 fn large_buffers() {
     let mut context = Context::new(None).unwrap();
     let buffers: Vec<_> = (0..2)
-        .map(|_| {
-            context
-                .create_buffer(
-                    Lifetime::Frame,
-                    &BufferRequest {
-                        memory_location: MemoryLocation::Device,
-                        size: 1024 * 1024 * 100,
-                        ty: BufferType::Storage,
-                    },
-                )
-                .unwrap()
-        })
+        .map(|_| create_test_buffer(&mut context, 1024 * 1024 * 100))
         .collect();
     let data_1 = vec![1; 1024].into_boxed_slice();
     let data_2 = vec![2; 1024].into_boxed_slice();
@@ -206,4 +188,33 @@ fn fill_buffer() {
         .unwrap();
     let data: &[u32] = bytemuck::cast_slice(&download.buffers[&buffer]);
     assert_eq!(data, &[0xdeadbeef_u32; 64]);
+}
+
+#[test]
+fn unaligned_compressed_textures() {
+    let mut context = Context::new(None).unwrap();
+    let extent = Extent::new(17, 19);
+    let image = context
+        .create_image(
+            Lifetime::Frame,
+            &ImageRequest {
+                format: ImageFormat::RgBc5Unorm,
+                memory_location: MemoryLocation::Device,
+                mip_level_count: 2,
+                extent,
+            },
+        )
+        .unwrap();
+    let data = random_bytes(
+        extent.width.next_multiple_of(4) as usize * extent.width.next_multiple_of(4) as usize,
+    );
+    context
+        .write_images(&[ImageWrite {
+            offset: Offset::default(),
+            image,
+            extent,
+            mips: Cow::from(&[data]),
+        }])
+        .unwrap();
+    context.execute_commands(false).unwrap();
 }

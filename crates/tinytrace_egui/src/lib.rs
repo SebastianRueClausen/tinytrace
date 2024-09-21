@@ -1,11 +1,12 @@
+#![warn(clippy::all)]
+
 use std::{borrow::Cow, mem};
 
-use ash::vk;
 use glam::{UVec2, Vec2};
 use tinytrace_backend::{
     binding, Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Error,
-    Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation, Sampler,
-    SamplerRequest, Shader, ShaderRequest,
+    Extent, Filter, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime, MemoryLocation,
+    Offset, Sampler, SamplerRequest, Shader, ShaderRequest,
 };
 
 #[repr(C)]
@@ -44,7 +45,7 @@ impl Renderer {
             Lifetime::Static,
             &ShaderRequest {
                 source: include_str!("draw.glsl"),
-                block_size: vk::Extent2D::default().width(32).height(32),
+                block_size: Extent::new(32, 32),
                 push_constant_size: Some(mem::size_of::<DrawParameters>() as u32),
                 bindings,
             },
@@ -52,9 +53,9 @@ impl Renderer {
         let sampler = context.create_sampler(
             Lifetime::Static,
             &SamplerRequest {
-                address_mode: vk::SamplerAddressMode::CLAMP_TO_EDGE,
-                filter: vk::Filter::LINEAR,
+                filter: Filter::Linear,
                 max_anisotropy: None,
+                clamp_to_edge: true,
             },
         )?;
         Ok(Self {
@@ -103,22 +104,14 @@ impl Renderer {
                         (bytes, image.width() as u32, image.height() as u32)
                     }
                 };
-                let extent = vk::Extent3D::default().width(width).height(height).depth(1);
+                let extent = Extent::new(width, height);
                 let (offset, image) = if let Some([x, y]) = delta.pos {
-                    let extent = vk::Offset3D::default().x(x as i32).y(y as i32);
                     let (_, image) = &self.textures[self.texture_index(*id)];
-                    (extent, image.clone())
+                    (Offset::new(x as i32, y as i32), image.clone())
                 } else {
-                    let image = create_texture(
-                        context,
-                        vk::Extent3D {
-                            depth: 1,
-                            width,
-                            height,
-                        },
-                    )?;
+                    let image = create_texture(context, extent)?;
                     self.textures.push((*id, image.clone()));
-                    (vk::Offset3D::default(), image)
+                    (Offset::default(), image)
                 };
                 Ok(ImageWrite {
                     mips: Cow::Owned(vec![bytes.into_boxed_slice()]),
@@ -156,8 +149,8 @@ impl Renderer {
                 }
             }
         }
-        let vertex_buffer = create_buffer(context, vertices.len() as vk::DeviceSize)?;
-        let index_buffer = create_buffer(context, indices.len() as vk::DeviceSize)?;
+        let vertex_buffer = create_buffer(context, vertices.len() as u64)?;
+        let index_buffer = create_buffer(context, indices.len() as u64)?;
         context.write_buffers(&[
             BufferWrite {
                 buffer: vertex_buffer.clone(),
@@ -182,13 +175,13 @@ impl Renderer {
         for draw in &draws {
             context
                 .push_constant(draw)
-                .dispatch(draw.area_size.x as u32, draw.area_size.y as u32)?;
+                .dispatch(draw.area_size.x, draw.area_size.y)?;
         }
         Ok(())
     }
 }
 
-fn create_buffer(context: &mut Context, size: vk::DeviceSize) -> Result<Handle<Buffer>, Error> {
+fn create_buffer(context: &mut Context, size: u64) -> Result<Handle<Buffer>, Error> {
     context.create_buffer(
         Lifetime::Frame,
         &BufferRequest {
@@ -199,7 +192,7 @@ fn create_buffer(context: &mut Context, size: vk::DeviceSize) -> Result<Handle<B
     )
 }
 
-fn create_texture(context: &mut Context, extent: vk::Extent3D) -> Result<Handle<Image>, Error> {
+fn create_texture(context: &mut Context, extent: Extent) -> Result<Handle<Image>, Error> {
     // TODO: Fix static lifetime.
     context.create_image(
         Lifetime::Static,
@@ -215,7 +208,7 @@ fn create_texture(context: &mut Context, extent: vk::Extent3D) -> Result<Handle<
 fn area_offset_size(
     clip_rect: &epaint::Rect,
     pixels_per_point: f32,
-    surface_extent: vk::Extent3D,
+    surface_extent: Extent,
 ) -> (UVec2, UVec2) {
     let transform =
         |value: f32, min, max| u32::clamp((pixels_per_point * value).round() as u32, min, max);

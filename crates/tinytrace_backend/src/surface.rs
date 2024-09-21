@@ -7,6 +7,7 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use super::sync::Access;
 use super::{resource, ImageFormat};
 use super::{Device, Error, Image, Instance};
+use crate::Extent;
 
 pub struct Swapchain {
     surface_loader: khr::surface::Instance,
@@ -105,12 +106,13 @@ fn current_extent(
     device: &Device,
     surface: SurfaceKHR,
     surface_loader: &khr::surface::Instance,
-) -> Result<vk::Extent2D, Error> {
-    Ok(unsafe {
+) -> Result<Extent, Error> {
+    let vk::Extent2D { width, height } = unsafe {
         surface_loader
             .get_physical_device_surface_capabilities(device.physical_device, surface)?
             .current_extent
-    })
+    };
+    Ok(Extent::new(width, height))
 }
 
 fn handle_present_result<T>(result: Result<T, vk::Result>) -> Result<T, Error> {
@@ -132,7 +134,7 @@ fn create_swapchain_images(
     loader: &khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
     format: ImageFormat,
-    extent: vk::Extent2D,
+    extent: Extent,
 ) -> Result<Vec<Image>, Error> {
     let images = unsafe { loader.get_swapchain_images(swapchain)? };
     images
@@ -142,12 +144,12 @@ fn create_swapchain_images(
             Ok(Image {
                 view: resource::create_image_view(device, image, format, 1)?,
                 layout: vk::ImageLayout::UNDEFINED,
-                extent: extent.into(),
                 access: Access::default(),
                 swapchain_index: Some(index as u32),
                 usage_flags: swapchain_image_usages(),
                 mip_level_count: 1,
                 timestamp: 0,
+                extent,
                 format,
                 image,
             })
@@ -160,7 +162,7 @@ fn create_swapchain(
     loader: &khr::swapchain::Device,
     surface: vk::SurfaceKHR,
     surface_loader: &khr::surface::Instance,
-    extent: vk::Extent2D,
+    extent: Extent,
     old: vk::SwapchainKHR,
 ) -> Result<(vk::SwapchainKHR, ImageFormat), Error> {
     let surface_capabilities = unsafe {
@@ -176,7 +178,7 @@ fn create_swapchain(
         .image_format(format.into())
         .queue_family_indices(slice::from_ref(&device.queue_family_index))
         .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
-        .image_extent(extent)
+        .image_extent(extent.into())
         .old_swapchain(old)
         .composite_alpha({
             let composite_modes = [

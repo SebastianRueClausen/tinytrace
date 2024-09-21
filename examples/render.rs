@@ -386,7 +386,7 @@ impl RendererController {
                             format!("{value}"),
                         );
                     };
-                    option(LightSampling::None);
+                    option(LightSampling::OnHit);
                     option(LightSampling::NextEventEstimation);
                 });
             ui.end_row();
@@ -484,6 +484,14 @@ impl CameraController {
             ui.add(egui::DragValue::new(&mut camera.position.z));
             ui.end_row();
 
+            ui.label("Yaw");
+            ui.add(egui::DragValue::new(&mut camera.yaw));
+            ui.end_row();
+
+            ui.label("Pitch");
+            ui.add(egui::DragValue::new(&mut camera.pitch));
+            ui.end_row();
+
             ui.label("Field of view");
             ui.drag_angle(&mut camera.fov);
             ui.end_row();
@@ -523,12 +531,13 @@ impl CameraController {
 
         self.velocity -= self.velocity * self.drag * dt.min(1.0);
         let right = camera.right();
+        let forward = camera.forward();
 
         if self.is_key_pressed(KeyCode::KeyW) {
-            self.velocity -= camera.forward * self.acceleration * dt;
+            self.velocity -= forward * self.acceleration * dt;
         }
         if self.is_key_pressed(KeyCode::KeyS) {
-            self.velocity += camera.forward * self.acceleration * dt;
+            self.velocity += forward * self.acceleration * dt;
         }
         if self.is_key_pressed(KeyCode::KeyA) {
             self.velocity -= right * self.acceleration * dt;

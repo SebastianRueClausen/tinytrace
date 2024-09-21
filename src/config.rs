@@ -35,7 +35,7 @@ impl fmt::Display for SampleStrategy {
 #[derive(bytemuck::NoUninit, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LightSampling {
     /// The only light contribution is from emissive surfaces randomly hit by paths.
-    None = 1,
+    OnHit = 1,
     /// Direct light is explicitly sampled along a path at each bounce if possible.
     #[default]
     NextEventEstimation = 2,
@@ -44,7 +44,7 @@ pub enum LightSampling {
 impl fmt::Display for LightSampling {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => write!(f, "None"),
+            Self::OnHit => write!(f, "None"),
             Self::NextEventEstimation => write!(f, "Next event estimation"),
         }
     }

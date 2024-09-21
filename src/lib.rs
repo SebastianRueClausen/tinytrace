@@ -20,9 +20,8 @@ use backend::{
     Buffer, BufferRequest, BufferType, BufferWrite, Context, Handle, Image, ImageFormat,
     ImageRequest, Lifetime, MemoryLocation,
 };
-use camera::Camera;
-use config::LightSampling;
-pub use config::{Config, RestirConfig, RestirReplay, SampleStrategy};
+pub use camera::{Camera, CameraMove};
+pub use config::{Config, LightSampling, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
 use hash_grid::HashGridLayout;
@@ -86,7 +85,7 @@ impl Renderer {
             None
         };
         Ok(Self {
-            camera: Camera::new(extent.width as f32 / extent.height as f32),
+            camera: Camera::default(),
             scene: Scene::new(&mut context, &scene)?,
             accumulated_frame_count: 0,
             config,
@@ -126,14 +125,14 @@ impl Renderer {
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<(), Error> {
         self.context.resize_surface()?;
         self.render_target = create_render_target(&mut self.context, extent)?;
-        self.camera.aspect = extent.width as f32 / extent.height as f32;
         self.extent = extent;
         self.reset_accumulation();
         Ok(())
     }
 
     pub fn render_to_target(&mut self) -> Result<(), Error> {
-        let (view, proj) = (self.camera.view(), self.camera.proj());
+        let aspect = self.extent.width as f32 / self.extent.height as f32;
+        let (view, proj) = (self.camera.view(), self.camera.proj(aspect));
         let proj_view = proj * view;
         let constants = Constants {
             screen_size: UVec2::new(self.extent.width, self.extent.height),
@@ -214,9 +213,12 @@ impl Renderer {
 
     pub fn render_to_texture(&mut self) -> Result<Box<[Vec4]>, Error> {
         self.render_to_target()?;
-        let mut download = self.context.download(&[], &[self.render_target.clone()])?;
-        let data = download.images.remove(&self.render_target).unwrap();
-        Ok(bytemuck::allocation::cast_slice_box(data))
+        let download = self.context.download(&[], &[self.render_target.clone()])?;
+        let data = &download.images[&self.render_target];
+        // FIXME: Hack to avoid alignment issues.
+        let mut output = vec![Vec4::ZERO; data.len() / mem::size_of::<Vec4>()];
+        bytemuck::cast_slice_mut::<Vec4, u8>(&mut output).copy_from_slice(data);
+        Ok(output.into_boxed_slice())
     }
 }
 

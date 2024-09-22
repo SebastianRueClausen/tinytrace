@@ -330,7 +330,7 @@ LobeType sample_scatter_direction(
         local_scatter = uniform_hemisphere_sample(generator);
         local_half_vector = normalize(local_scatter + local_view);
         lobe_type = DIFFUSE_LOBE;
-        pdf = 1.0 / PI;
+        pdf = INVERSE_2_PI;
     } else if (constants.sample_strategy == COSINE_HEMISPHERE_SAMPLING) {
         local_scatter = cosine_hemisphere_sample(generator);
         local_half_vector = normalize(local_scatter + local_view);

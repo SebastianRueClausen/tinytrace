@@ -11,9 +11,10 @@ const SampleStrategy COSINE_HEMISPHERE_SAMPLING= 2;
 const SampleStrategy BRDF_SAMPLING = 2;
 
 vec3 uniform_hemisphere_sample(inout Generator generator) {
-    float theta = 2.0 * PI * random_float(generator);
-    float phi = acos(1.0 - random_float(generator));
-    return vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+    float z = random_float(generator);
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * PI * random_float(generator);
+    return vec3(r * cos(phi), r * sin(phi), z);
 }
 
 vec2 sample_disk(inout Generator generator) {
@@ -22,10 +23,10 @@ vec2 sample_disk(inout Generator generator) {
     float phi, r;
     if (abs(u.x) > abs(u.y)) {
         r = u.x;
-        phi = (u.y / u.x) * (PI / 4.0);
+        phi = (u.y / u.x) * PI_OVER_4;
     } else {
         r = u.y;
-        phi = (PI / 2.0) - (u.x / u.y) * (PI / 4.0);
+        phi = PI_OVER_2 - (u.x / u.y) * PI_OVER_4;
     }
     return r * vec2(cos(phi), sin(phi));
 }

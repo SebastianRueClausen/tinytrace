@@ -3,6 +3,11 @@
 
 const float TAU = 6.283185307179586;
 const float PI = 3.1415926535897932;
+const float INVERSE_PI = 1.0 / PI;
+const float INVERSE_2_PI = 1.0 / (2.0 * PI);
+const float PI_OVER_2 = PI / 2.0;
+const float PI_OVER_3 = PI / 3.0;
+const float PI_OVER_4 = PI / 4.0;
 
 // An orthonormal basis.
 struct Basis {

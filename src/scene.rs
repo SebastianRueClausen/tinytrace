@@ -9,7 +9,7 @@ use crate::Error;
 use tinytrace_backend::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, BufferWrite,
     Context, Extent, Filter, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime,
-    MemoryLocation, Offset, Sampler, SamplerRequest, Tlas, TlasInstance,
+    MemoryLocation, Offset, Sampler, SamplerRequest, Tlas, TlasBuildMode, TlasInstance,
 };
 
 pub struct Scene {
@@ -71,7 +71,7 @@ impl Scene {
             .zip(textures.iter())
             .map(|(texture, image)| ImageWrite {
                 offset: Offset::default(),
-                extent: context.image(image).extent,
+                extent: context.image(image).extent(),
                 image: image.clone(),
                 mips: Cow::Borrowed(&texture.mips),
             })
@@ -129,8 +129,7 @@ impl Scene {
             .collect();
         let tlas = context.create_tlas(Lifetime::Scene, tlas_instances.len() as u32)?;
 
-        let build_mode = vk::BuildAccelerationStructureModeKHR::BUILD;
-        context.build_tlas(&tlas, build_mode, &tlas_instances)?;
+        context.build_tlas(&tlas, TlasBuildMode::Build, &tlas_instances)?;
 
         Ok(Self {
             vertices,

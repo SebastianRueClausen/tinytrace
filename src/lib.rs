@@ -210,12 +210,13 @@ impl Renderer {
 
     pub fn render_to_texture(&mut self) -> Result<Box<[Vec4]>, Error> {
         self.render_to_target()?;
-        let download = self.context.download(&[], &[self.render_target.clone()])?;
-        let data = &download.images[&self.render_target];
-        // FIXME: Hack to avoid alignment issues.
-        let mut output = vec![Vec4::ZERO; data.len() / mem::size_of::<Vec4>()];
-        bytemuck::cast_slice_mut::<Vec4, u8>(&mut output).copy_from_slice(data);
-        Ok(output.into_boxed_slice())
+        let mut download = self.context.download(&[], &[self.render_target.clone()])?;
+        let data = download.images.remove(&self.render_target).unwrap();
+        // SAFETY: This is safe to do as the memory returned by `download` is 16 byte aligned.
+        Ok(unsafe {
+            let size = data.len() / mem::size_of::<Vec4>();
+            Vec::from_raw_parts(Box::into_raw(data) as *mut Vec4, size, size).into_boxed_slice()
+        })
     }
 }
 

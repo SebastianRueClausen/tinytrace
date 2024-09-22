@@ -4,14 +4,14 @@ use std::{hash, marker};
 /// The handle of a resource.
 #[derive(Debug, Copy)]
 pub struct Handle<T> {
-    pub(super) lifetime: Lifetime,
-    pub(super) index: usize,
-    pub(super) epoch: usize,
+    pub(crate) lifetime: Lifetime,
+    pub(crate) index: usize,
+    pub(crate) epoch: usize,
     _marker: std::marker::PhantomData<T>,
 }
 
 impl<T> Handle<T> {
-    pub(super) fn new(lifetime: Lifetime, epoch: usize, vec: &mut Vec<T>, value: T) -> Self {
+    pub(crate) fn new(lifetime: Lifetime, epoch: usize, vec: &mut Vec<T>, value: T) -> Self {
         vec.push(value);
         Self {
             index: vec.len() - 1,

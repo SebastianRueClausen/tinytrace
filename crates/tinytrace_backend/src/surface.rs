@@ -146,7 +146,6 @@ fn create_swapchain_images(
                 layout: vk::ImageLayout::UNDEFINED,
                 access: Access::default(),
                 swapchain_index: Some(index as u32),
-                usage_flags: swapchain_image_usages(),
                 mip_level_count: 1,
                 timestamp: 0,
                 extent,

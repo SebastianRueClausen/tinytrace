@@ -519,6 +519,7 @@ fn current_descriptor_buffer(command_buffers: &mut [CommandBuffer]) -> &mut Desc
     &mut command_buffers.first_mut().unwrap().descriptor_buffer
 }
 
+/// Commands for using shaders.
 impl Context {
     pub fn bind_shader(&mut self, shader: &Handle<Shader>) -> &mut Self {
         self.bound_shader = Some(BoundShader::new(shader.clone()));

@@ -91,7 +91,7 @@ impl Integrator {
             .bind_sampled_images("textures", &scene.texture_sampler, &scene.textures)
             .bind_acceleration_structure("acceleration_structure", &scene.tlas)
             .bind_storage_image("target", target);
-        let Extent { width, height } = context.image(target).extent;
+        let Extent { width, height } = context.image(target).extent();
         context.dispatch(width, height)?;
         self.restir_state.update_reservoirs(context, constants)
     }

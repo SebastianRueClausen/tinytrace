@@ -3,6 +3,7 @@ use crate::{Extent, Offset};
 use super::{sync::Access, Buffer, Context, Error, Handle, Image, Lifetime};
 use ash::vk;
 
+use std::alloc;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -54,6 +55,7 @@ fn buffer_image_copy(
         .image_subresource(subresource)
 }
 
+/// Commands for transferring memory.
 impl Context {
     /// Write data to buffers. The data is first written to staging buffers before being copied
     /// to the actual buffers.
@@ -176,7 +178,8 @@ impl Context {
 
     /// Download data from buffers and images.
     ///
-    /// The memory of images with multiple mips is densely packed. This executes all pending commands.
+    /// The memory of images with multiple mips is densely packed. This executes all pending
+    /// commands. The returned data is stored in 16 byte aligned allocations.
     pub fn download(
         &mut self,
         buffers: &[Handle<Buffer>],
@@ -271,7 +274,7 @@ impl Context {
 
         // Copy data from scratch memory.
         let mut copy_from_mapping = |size| unsafe {
-            let mut memory = vec![0x0u8; size];
+            let mut memory = allocate_aligned_vec(size);
             memory.as_mut_ptr().copy_from_nonoverlapping(mapping, size);
             mapping = mapping.add(size.next_multiple_of(CHUNK_ALIGNMENT));
             memory.into_boxed_slice()
@@ -292,6 +295,16 @@ impl Context {
             .collect();
         self.clear_resources_with_lifetime(Lifetime::Frame)?;
         Ok(Download { buffers, images })
+    }
+}
+
+fn allocate_aligned_vec(size: usize) -> Vec<u8> {
+    unsafe {
+        let ptr = alloc::alloc(alloc::Layout::from_size_align_unchecked(
+            size,
+            CHUNK_ALIGNMENT,
+        ));
+        Vec::from_raw_parts(ptr, size, size)
     }
 }
 

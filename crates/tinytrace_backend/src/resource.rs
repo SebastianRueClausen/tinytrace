@@ -116,12 +116,12 @@ pub struct BufferRequest {
 
 #[derive(Debug)]
 pub struct Buffer {
-    pub buffer: vk::Buffer,
-    pub memory_index: MemoryIndex,
-    pub size: vk::DeviceSize,
-    pub access: Access,
-    pub usage_flags: vk::BufferUsageFlags,
-    pub timestamp: u64,
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) memory_index: MemoryIndex,
+    pub(crate) size: vk::DeviceSize,
+    pub(crate) access: Access,
+    pub(crate) usage_flags: vk::BufferUsageFlags,
+    pub(crate) timestamp: u64,
 }
 
 impl Context {
@@ -137,7 +137,7 @@ impl Context {
 }
 
 impl Buffer {
-    pub fn new(
+    pub(crate) fn new(
         device: &Device,
         allocator: &mut Allocator,
         request: &BufferRequest,
@@ -165,12 +165,16 @@ impl Buffer {
         })
     }
 
-    pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
+    pub fn size(&self) -> vk::DeviceSize {
+        self.size
+    }
+
+    pub(crate) fn device_address(&self, device: &Device) -> vk::DeviceAddress {
         let address_info = vk::BufferDeviceAddressInfo::default().buffer(self.buffer);
         unsafe { device.get_buffer_device_address(&address_info) }
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub(crate) fn destroy(&self, device: &Device) {
         unsafe {
             device.destroy_buffer(self.buffer, None);
         }
@@ -248,16 +252,15 @@ pub struct ImageRequest {
 
 #[derive(Debug)]
 pub struct Image {
-    pub image: vk::Image,
-    pub view: vk::ImageView,
-    pub extent: Extent,
-    pub format: ImageFormat,
-    pub mip_level_count: u32,
-    pub swapchain_index: Option<u32>,
-    pub layout: vk::ImageLayout,
-    pub access: Access,
-    pub timestamp: u64,
-    pub usage_flags: vk::ImageUsageFlags,
+    pub(crate) image: vk::Image,
+    pub(crate) view: vk::ImageView,
+    pub(crate) extent: Extent,
+    pub(crate) format: ImageFormat,
+    pub(crate) mip_level_count: u32,
+    pub(crate) swapchain_index: Option<u32>,
+    pub(crate) layout: vk::ImageLayout,
+    pub(crate) access: Access,
+    pub(crate) timestamp: u64,
 }
 
 impl Context {
@@ -302,7 +305,6 @@ impl Context {
             swapchain_index: None,
             access: Access::default(),
             timestamp: 0,
-            usage_flags,
             image,
         };
         Ok(Handle::new(lifetime, pool.epoch, &mut pool.images, image))
@@ -321,13 +323,25 @@ impl Image {
         block_count as vk::DeviceSize * bytes_per_block
     }
 
+    pub fn mip_level_count(&self) -> u32 {
+        self.mip_level_count
+    }
+
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+
+    pub fn format(&self) -> ImageFormat {
+        self.format
+    }
+
     pub fn size(&self) -> vk::DeviceSize {
         (0..self.mip_level_count)
             .map(|level| self.mip_byte_size(level))
             .sum()
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub(crate) fn destroy(&self, device: &Device) {
         if self.swapchain_index.is_none() {
             unsafe {
                 device.destroy_image(self.image, None);
@@ -389,9 +403,9 @@ impl MemoryLocation {
     }
 }
 
-/// A linearly allocated contiguous block of memory.
+// A linearly allocated contiguous block of memory.
 #[derive(Debug)]
-pub struct MemoryBlock {
+struct MemoryBlock {
     memory: vk::DeviceMemory,
     size: vk::DeviceSize,
     offset: vk::DeviceSize,
@@ -436,8 +450,9 @@ impl MemoryBlock {
     }
 }
 
+// A reference to a piece of memory from an allocator.
 #[derive(Clone, Copy, Debug)]
-pub struct MemoryIndex {
+pub(crate) struct MemoryIndex {
     block_index: usize,
     memory_type_index: u32,
     offset: vk::DeviceSize,
@@ -447,14 +462,14 @@ const DEFAULT_BLOCK_SIZE: vk::DeviceSize = 1024 * 1024 * 20;
 
 // A linear block allocator.
 #[derive(Default, Debug)]
-pub struct Allocator {
+pub(crate) struct Allocator {
     // The block allocated for each memory type index.
     blocks: HashMap<u32, Vec<MemoryBlock>>,
 }
 
 impl Allocator {
     // TODO: It might be worth checking previous blocks for free space.
-    pub fn allocate(
+    fn allocate(
         &mut self,
         device: &Device,
         memory_flags: vk::MemoryPropertyFlags,
@@ -541,11 +556,11 @@ pub struct SamplerRequest {
 
 #[derive(Debug)]
 pub struct Sampler {
-    pub sampler: vk::Sampler,
+    pub(crate) sampler: vk::Sampler,
 }
 
 impl Sampler {
-    pub fn new(device: &Device, request: &SamplerRequest) -> Result<Self, Error> {
+    pub(crate) fn new(device: &Device, request: &SamplerRequest) -> Result<Self, Error> {
         let address_mode = match request.clamp_to_edge {
             true => vk::SamplerAddressMode::CLAMP_TO_EDGE,
             false => vk::SamplerAddressMode::REPEAT,
@@ -571,7 +586,7 @@ impl Sampler {
         Ok(Self { sampler })
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub(crate) fn destroy(&self, device: &Device) {
         unsafe {
             device.destroy_sampler(self.sampler, None);
         }
@@ -605,9 +620,9 @@ pub struct Blas {
     acceleration_structure: vk::AccelerationStructureKHR,
     build_scratch_size: vk::DeviceSize,
     request: BlasRequest,
-    pub access: Access,
-    pub timestamp: u64,
     buffer: Handle<Buffer>,
+    pub(crate) access: Access,
+    pub(crate) timestamp: u64,
 }
 
 impl Context {
@@ -710,14 +725,14 @@ impl Context {
 }
 
 impl Blas {
-    pub fn destroy(&self, device: &Device) {
+    pub(crate) fn destroy(&self, device: &Device) {
         let loader = &device.acceleration_structure;
         unsafe {
             loader.destroy_acceleration_structure(self.acceleration_structure, None);
         }
     }
 
-    pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
+    pub(crate) fn device_address(&self, device: &Device) -> vk::DeviceAddress {
         acceleration_structure_device_address(device, self.acceleration_structure)
     }
 }
@@ -815,12 +830,11 @@ impl Context {
 
 #[derive(Debug)]
 pub struct Tlas {
-    pub acceleration_structure: vk::AccelerationStructureKHR,
-    pub buffer: Handle<Buffer>,
-    pub scratch: Handle<Buffer>,
-    pub instances: Handle<Buffer>,
-    pub access: Access,
-    pub timestamp: u64,
+    pub(crate) acceleration_structure: vk::AccelerationStructureKHR,
+    scratch: Handle<Buffer>,
+    instances: Handle<Buffer>,
+    pub(crate) access: Access,
+    pub(crate) timestamp: u64,
 }
 
 impl Context {
@@ -906,7 +920,6 @@ impl Context {
             timestamp: 0,
             acceleration_structure,
             instances,
-            buffer,
             scratch,
         };
         let pool = self.pools.entry(lifetime).or_default();
@@ -915,11 +928,11 @@ impl Context {
 }
 
 impl Tlas {
-    pub fn device_address(&self, device: &Device) -> vk::DeviceAddress {
+    pub(crate) fn device_address(&self, device: &Device) -> vk::DeviceAddress {
         acceleration_structure_device_address(device, self.acceleration_structure)
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub(crate) fn destroy(&self, device: &Device) {
         let loader = &device.acceleration_structure;
         unsafe {
             loader.destroy_acceleration_structure(self.acceleration_structure, None);
@@ -927,9 +940,24 @@ impl Tlas {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TlasBuildMode {
+    Build = vk::BuildAccelerationStructureModeKHR::BUILD.as_raw() as isize,
+    Update = vk::BuildAccelerationStructureModeKHR::UPDATE.as_raw() as isize,
+}
+
+impl From<TlasBuildMode> for vk::BuildAccelerationStructureModeKHR {
+    fn from(mode: TlasBuildMode) -> Self {
+        vk::BuildAccelerationStructureModeKHR::from_raw(mode as i32)
+    }
+}
+
+/// The instance in a [`Tlas`].
+#[derive(Debug, Clone)]
 pub struct TlasInstance {
     pub blas: Handle<Blas>,
     pub transform: Mat4,
+    /// A custom index that can be queried in shaders.
     pub index: u32,
 }
 
@@ -937,7 +965,7 @@ impl Context {
     pub fn build_tlas(
         &mut self,
         tlas: &Handle<Tlas>,
-        mode: vk::BuildAccelerationStructureModeKHR,
+        mode: TlasBuildMode,
         instances: &[TlasInstance],
     ) -> Result<&mut Self, Error> {
         let instance_data: Vec<_> = instances
@@ -962,7 +990,7 @@ impl Context {
             .dst_acceleration_structure(self.tlas(tlas).acceleration_structure)
             .src_acceleration_structure(self.tlas(tlas).acceleration_structure)
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .mode(mode)
+            .mode(mode.into())
             .flags(
                 vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE
                     | vk::BuildAccelerationStructureFlagsKHR::ALLOW_DATA_ACCESS
@@ -1008,7 +1036,7 @@ impl Context {
     }
 }
 
-// vk::AccelerationStructureInstanceKHR.
+// The same layout as vk::AccelerationStructureInstanceKHR.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::NoUninit, Default)]
 struct TlasInstanceData {

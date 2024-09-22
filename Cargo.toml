@@ -27,3 +27,7 @@ tinytrace_viewer = { path = "crates/tinytrace_viewer" }
 
 [[example]]
 name = "viewer"
+
+[[bench]]
+name = "bias"
+harness = false

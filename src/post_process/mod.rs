@@ -51,7 +51,7 @@ impl PostProcess {
             .bind_buffer("constants", constants)
             .bind_storage_image("render_target", render_target)
             .bind_storage_image("swapchain", swapchain);
-        let Extent { width, height } = context.image(swapchain).extent;
+        let Extent { width, height } = context.image(swapchain).extent();
         context.dispatch(width, height)?;
         Ok(())
     }

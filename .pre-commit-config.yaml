@@ -20,6 +20,12 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+      - id: doc
+        name: cargo doc
+        entry: cargo doc --workspace
+        language: system
+        always_run: true
+        pass_filenames: false
       - id: line count
         name: line count
         entry: ./line_count.sh

@@ -1,14 +1,17 @@
 #![warn(clippy::all)]
-//! # The backend tinytrace
+//! # The backend of tinytrace
 //!
-//! The Vulkan backend of tinytrace. It is written to both be a simple implementation and be
-//! simple to use. It makes a few compromises to make this possible:
-//! * Only use compute shaders.
+//! The Vulkan backend of tinytrace. The backend of tinytrace is written to be both a simple
+//! implementation and to be simple to use.
+//!
+//! It makes a few compromises to make this possible:
+//! * Only support compute shaders.
 //! * Somewhat naive synchronization.
 //! * Limited use of buffers and images.
 //!
-//! In order to not be painful to use, it does a lot of stuff automatically:
-//! * Synchronize between commands.
+//! In order to make Vulkan not painful to use, it automates a lot of stuff which otherwise would
+//! have to be managed manually:
+//! * Synchronization between commands.
 //! * Upload and download buffers and images.
 //! * Manage descriptors.
 //! * Cleanup resources.
@@ -33,8 +36,8 @@ use std::collections::HashMap;
 use std::slice;
 use std::time::Duration;
 
-use self::sync::Sync;
-use self::{surface::Swapchain, sync::Access};
+use surface::Swapchain;
+use sync::{Access, Sync};
 
 use ash::vk;
 use command::CommandBuffer;
@@ -48,7 +51,7 @@ use resource::Allocator;
 pub use resource::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Extent, Filter,
     Image, ImageFormat, ImageRequest, MemoryLocation, Offset, Sampler, SamplerRequest, Tlas,
-    TlasInstance,
+    TlasBuildMode, TlasInstance,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};
@@ -125,15 +128,15 @@ impl Pool {
 pub struct Context {
     instance: Instance,
     device: Device,
-    /// Swapchain and swapchain images.
+    // Swapchain and swapchain images.
     swapchain: Option<(Swapchain, Vec<Handle<Image>>)>,
     pools: HashMap<Lifetime, Pool>,
-    /// Ring-buffer of command buffers. The first command buffer is always active.
+    // Ring-buffer of command buffers. The first command buffer is always active.
     command_buffers: Vec<CommandBuffer>,
     bound_shader: Option<BoundShader>,
-    /// The index of the last acquired swapchain swapchain image.
+    // The index of the last acquired swapchain swapchain image.
     acquired_swapchain_image: Option<Handle<Image>>,
-    /// Map from path to source of shader includes.
+    // Map from path to source of shader includes.
     includes: HashMap<&'static str, String>,
     timestamps: HashMap<String, Duration>,
     sync: Sync,
@@ -163,6 +166,8 @@ impl Drop for Context {
 }
 
 impl Context {
+    /// Create new context. `window` can be `None` if the context will be used for offline
+    /// rendering.
     pub fn new(window: Option<(RawWindowHandle, RawDisplayHandle)>) -> Result<Self, Error> {
         let instance = Instance::new(true)?;
         let device = Device::new(&instance)?;
@@ -243,49 +248,23 @@ impl Context {
         Ok(timestamp)
     }
 
+    /// Clear all resources created with `lifetime`. This means that using handles for resources
+    /// created with `lifetime` will cause a panic.
     pub fn clear_resources_with_lifetime(&mut self, lifetime: Lifetime) -> Result<(), Error> {
         self.advance_lifetime(lifetime, false).map(|_| ())
     }
-}
 
-macro_rules! accessor {
-    ($ty:ty, $name:ident, $field:ident) => {
-        pub fn $name(&self, handle: &Handle<$ty>) -> &$ty {
-            self.check_handle(handle);
-            &self.pools[&handle.lifetime].$field[handle.index]
-        }
-    };
-    ($ty:ty, $name:ident, $field:ident, mut) => {
-        pub fn $name(&mut self, handle: &Handle<$ty>) -> &mut $ty {
-            self.check_handle(handle);
-            &mut self.pools.get_mut(&handle.lifetime).unwrap().$field[handle.index]
-        }
-    };
-}
-
-impl Context {
-    accessor!(Buffer, buffer, buffers);
-    accessor!(Buffer, buffer_mut, buffers, mut);
-    accessor!(Image, image, images);
-    accessor!(Image, image_mut, images, mut);
-    accessor!(Shader, shader, shaders);
-    accessor!(Sampler, sampler, samplers);
-    accessor!(Blas, blas, blases);
-    accessor!(Blas, blas_mut, blases, mut);
-    accessor!(Tlas, tlas, tlases);
-    accessor!(Tlas, tlas_mut, tlases, mut);
-}
-
-impl Context {
     fn swapchain(&self) -> &(Swapchain, Vec<Handle<Image>>) {
         self.swapchain.as_ref().expect("no swapchain present")
     }
 
+    /// Get the format of the surface.
     pub fn surface_format(&self) -> ImageFormat {
         let (swapchain, _) = self.swapchain();
         swapchain.format
     }
 
+    /// Get the current frame index. The frame index is incremented each time `present` is called.
     pub fn frame_index(&self) -> usize {
         self.sync.frame_index
     }
@@ -295,10 +274,22 @@ impl Context {
         self.includes.insert(path, source);
     }
 
+    /// Get the [`Duration`] of timestamp with `name` if available.
+    ///
+    /// The [`Duration`] is relative to an unspecified time in the past, but can be compared to
+    /// other timestamps.
+    ///
+    /// If multiple timestamps have been recorded with `name` then the latests available is
+    /// returned. This is not guaranteed to be the most recent recorded as this function will
+    /// never wait or submit recorded commands. This also means that a timestamp is not guaranteed
+    /// to be available before calling [`Self::wait_until_idle`]. However, in practice, it should be
+    /// available within a few frames.
     pub fn timestamp(&self, name: &str) -> Option<Duration> {
         self.timestamps.get(name).copied()
     }
 
+    /// Wait until the device is idle. This means that all recorded commands will have been
+    /// executed and all recorded timestamps will be available.
     pub fn wait_until_idle(&mut self) -> Result<(), Error> {
         self.execute_commands(false)?;
         for command_buffer in self.command_buffers[1..].iter_mut().rev() {
@@ -318,7 +309,7 @@ impl Context {
             .map(|sampler| Handle::new(lifetime, pool.epoch, &mut pool.samplers, sampler))
     }
 
-    /// Executes all recorded commands. Returns the timestamp signaled when when done.
+    // Executes all recorded commands. Returns the timestamp signaled when when done.
     fn execute_commands(&mut self, present: bool) -> Result<u64, Error> {
         let command_buffer = self.command_buffers.first_mut().unwrap();
         command_buffer.end(&self.device, self.sync.timestamp + 1)?;
@@ -367,7 +358,8 @@ impl Context {
     }
 
     /// Acquire the next swapchain image. This must be done exactly once before calling `present`.
-    /// The error `Error::SurfaceOutdated` may be returned, which signals that
+    /// The error [`Error::SurfaceOutdated`] may be returned, which signals that the window may
+    /// have been resized and `resize_surface` should be called.
     pub fn swapchain_image(&mut self) -> Result<Handle<Image>, Error> {
         // Wait here to avoid the CPU being to far ahead of the GPU. Also ensure that
         // the `acquired` semaphore is available.
@@ -380,6 +372,7 @@ impl Context {
         Ok(image)
     }
 
+    /// Resize surface. This invalidates all handles to resources with lifetime [`Lifetime::Surface`].
     pub fn resize_surface(&mut self) -> Result<(), Error> {
         // We have to wait until idle here because we don't use fences when presenting.
         self.device.wait_until_idle()?;
@@ -395,6 +388,8 @@ impl Context {
         Ok(())
     }
 
+    /// Present the last acquired swapchain image. Panics if no swapchain image has been acquired
+    /// since previous present.
     pub fn present(&mut self) -> Result<(), Error> {
         if let Some(image) = self.acquired_swapchain_image.take() {
             let access = Access {
@@ -429,6 +424,35 @@ impl Context {
         let handle = Handle::new(Lifetime::Frame, pool.epoch, &mut pool.buffers, scratch);
         Ok((handle, mapping))
     }
+}
+
+macro_rules! accessor {
+    ($ty:ty, $name:ident, $field:ident) => {
+        pub fn $name(&self, handle: &Handle<$ty>) -> &$ty {
+            self.check_handle(handle);
+            &self.pools[&handle.lifetime].$field[handle.index]
+        }
+    };
+    ($ty:ty, $name:ident, $field:ident, mut) => {
+        pub fn $name(&mut self, handle: &Handle<$ty>) -> &mut $ty {
+            self.check_handle(handle);
+            &mut self.pools.get_mut(&handle.lifetime).unwrap().$field[handle.index]
+        }
+    };
+}
+
+/// Functions for accessing resources.
+impl Context {
+    accessor!(Buffer, buffer, buffers);
+    accessor!(Buffer, buffer_mut, buffers, mut);
+    accessor!(Image, image, images);
+    accessor!(Image, image_mut, images, mut);
+    accessor!(Shader, shader, shaders);
+    accessor!(Sampler, sampler, samplers);
+    accessor!(Blas, blas, blases);
+    accessor!(Blas, blas_mut, blases, mut);
+    accessor!(Tlas, tlas, tlases);
+    accessor!(Tlas, tlas_mut, tlases, mut);
 }
 
 fn semaphore_submit_info(semaphore: vk::Semaphore, value: u64) -> vk::SemaphoreSubmitInfo<'static> {

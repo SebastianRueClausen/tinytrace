@@ -78,7 +78,7 @@ impl Renderer {
         target: &Handle<Image>,
         request: &RenderRequest,
     ) -> Result<(), Error> {
-        let target_extent = context.image(target).extent;
+        let target_extent = context.image(target).extent();
         let screen_size_in_points =
             Vec2::new(target_extent.width as f32, target_extent.height as f32)
                 / request.pixels_per_point;

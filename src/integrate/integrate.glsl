@@ -176,11 +176,11 @@ DirectLightSample sample_random_light(inout Generator generator) {
 
 vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties surface, inout Generator generator) {
     DirectLightSample light_sample = sample_random_light(generator);
-    // TODO: This can be micro-optimized.
-    Ray ray = Ray(normalize(light_sample.position - position), position);
-    float distance_squared = length_squared(light_sample.position - position);
+    vec3 to_light = light_sample.position - position;
+    float distance_squared = length_squared(to_light);
+    Ray ray = Ray(to_light / sqrt(distance_squared), position);
     // Transform the area density to the solid angle density.
-    float pdf = (1.0 / light_sample.area) * distance_squared / saturate(dot(-ray.direction, light_sample.normal)) * light_sample.light_probability;
+    float density = (1.0 / light_sample.area) * distance_squared / saturate(dot(-ray.direction, light_sample.normal)) * light_sample.light_probability;
 
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(
@@ -206,7 +206,7 @@ vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties sur
     ScatterProperties scatter = create_scatter_properties(surface, ray.direction, normal);
     vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
-    return brdf * emissive * abs(scatter.normal_dot_scatter) / pdf;
+    return brdf * emissive * abs(scatter.normal_dot_scatter) / density;
 }
 
 Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
@@ -250,18 +250,7 @@ Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
 
 struct TracePathConfig {
     uint bounce_count;
-    bool find_resample_path;
-    bool resample_path;
-};
-
-// A found (or not found) resample path.
-struct ResamplePath {
-    // The path found.
-    Path path;
-    // The probability density function of generating the path.
-    float pdf;
-    // True if a valid path is found.
-    bool is_found;
+    bool find_resample_path, resample_path;
 };
 
 // State required when generating resample paths.
@@ -275,8 +264,7 @@ struct ResampleState {
     BounceSurface origin, destination;
     // The generator from just before generating a path from `destination`.
     Generator generator;
-    // The pdf of the found path.
-    float pdf;
+    float scatter_density;
     // True if a path has been found.
     bool is_found;
 };
@@ -323,19 +311,19 @@ PathState create_path_state(Generator generator, Generator path_generator, vec2 
 
 LobeType sample_scatter_direction(
     in SurfaceProperties surface, inout Generator generator, vec3 local_view,
-    out vec3 local_scatter, out vec3 local_half_vector, out float pdf
+    out vec3 local_scatter, out vec3 local_half_vector, out float density
 ) {
     LobeType lobe_type = 0;
     if (constants.sample_strategy == UNIFORM_HEMISPHERE_SAMPLING) {
         local_scatter = uniform_hemisphere_sample(generator);
         local_half_vector = normalize(local_scatter + local_view);
         lobe_type = DIFFUSE_LOBE;
-        pdf = INVERSE_2_PI;
+        density = INVERSE_2_PI;
     } else if (constants.sample_strategy == COSINE_HEMISPHERE_SAMPLING) {
         local_scatter = cosine_hemisphere_sample(generator);
         local_half_vector = normalize(local_scatter + local_view);
         lobe_type = DIFFUSE_LOBE;
-        pdf = cosine_hemisphere_pdf(local_scatter.z);
+        density = cosine_hemisphere_density(local_scatter.z);
     } else {
         if (random_float(generator) > surface.metallic) {
             local_scatter = cosine_hemisphere_sample(generator);
@@ -345,19 +333,14 @@ LobeType sample_scatter_direction(
             local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
             lobe_type = SPECULAR_LOBE;
         }
-        pdf = surface.metallic * ggx_pdf(local_view, local_half_vector, surface.roughness)
-            + (1.0 - surface.metallic) * cosine_hemisphere_pdf(local_scatter.z);
+        density = surface.metallic * ggx_density(local_view, local_half_vector, surface.roughness)
+            + (1.0 - surface.metallic) * cosine_hemisphere_density(local_scatter.z);
     }
     return lobe_type;
 }
 
 // Trace the next path segment. Returns true false if the path has left the scene.
-bool next_path_segment(
-    inout PathState path_state,
-    inout ResampleState resample_state,
-    inout TracePathConfig config,
-    uint bounce
-) {
+bool next_path_segment(inout PathState path_state, inout ResampleState resample_state, inout TracePathConfig config, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
         vec3 sky_color = vec3(0.0);
@@ -412,7 +395,7 @@ bool next_path_segment(
     // litterature.
     vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
 
-    float pdf = 0.0;
+    float scatter_density = 0.0;
     vec3 local_scatter, local_half_vector;
 
     bool can_reconnect = config.resample_path
@@ -441,7 +424,7 @@ bool next_path_segment(
                 ));
                 local_half_vector = normalize(local_scatter + local_view);
                 float jacobian = path_jacobian(hit.world_position, reservoir.path);
-                pdf = 1.0 / reservoir.weight * clamp(jacobian, 0.00001, 1000.0);
+                scatter_density = 1.0 / reservoir.weight * clamp(jacobian, 0.00001, 1000.0);
                 path_state.replay_path.radiance =
                     vec3(reservoir.path.radiance[0], reservoir.path.radiance[1], reservoir.path.radiance[2]);
                 path_state.replay_path.reconnect_location = reservoir.path.destination;
@@ -452,8 +435,8 @@ bool next_path_segment(
 
     Generator before_sample_generator = path_state.path_generator;
 
-    bool perform_next_event_estimation = surface.roughness > 0.15
-        && constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION;
+    bool perform_next_event_estimation = constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION
+        && surface.roughness > 0.15;
 
     // Next event estimation.
     if (perform_next_event_estimation) {
@@ -474,8 +457,8 @@ bool next_path_segment(
     }
 
     LobeType lobe_type = 0;
-    if (pdf == 0.0) {
-        lobe_type = sample_scatter_direction(surface, path_state.path_generator, local_view, local_scatter, local_half_vector, pdf);
+    if (scatter_density == 0.0) {
+        lobe_type = sample_scatter_direction(surface, path_state.path_generator, local_view, local_scatter, local_half_vector, scatter_density);
     }
 
     bool can_form_resample_path = config.find_resample_path
@@ -493,12 +476,12 @@ bool next_path_segment(
         // depend on the incidence vector, which will be different because of the reconnection.
         && lobe_type == DIFFUSE_LOBE
         // Very short reconnection paths can cause a bunch of problems.
-        && length(hit.world_position - path_state.ray.origin) > 0.05;
+        && length_squared(hit.world_position - path_state.ray.origin) > 0.0025;
     if (can_form_resample_path) {
         resample_state.origin = create_bounce_surface(path_state.ray.origin, resample_state.previous_normal);
         resample_state.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
         resample_state.generator = before_sample_generator;
-        resample_state.pdf = pdf;
+        resample_state.scatter_density = scatter_density;
         resample_state.is_found = true;
     }
 
@@ -509,11 +492,10 @@ bool next_path_segment(
         create_scatter_properties(surface, path_state.ray.direction, surface_basis.normal);
     vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
-    // FIXME: The minimum here fixes NaNs appearing sometimes,
-    // most likely because the pdf is very small (it doesn't ever
-    // appear to be 0.0, thus it is likely to be numeric issues and
+    // FIXME: The minimum here fixes NaNs appearing sometimes, most likely because `scatter_density`
+    // is very small (it doesn't ever appear to be 0.0, thus it is likely to be numeric issues and
     // not algebraic).
-    vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / pdf, vec3(1.0));
+    vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / scatter_density, vec3(1.0));
 
     if (constants.restir_replay == REPLAY_NONE && path_state.replay_path.is_found) {
         path_state.accumulated += attenuation_factor * path_state.attenuation * path_state.replay_path.radiance;
@@ -573,7 +555,7 @@ void main() {
                 reservoir.path.generator = resample_state.generator;
                 for (uint i = 0; i < 3; i++) reservoir.path.radiance[i] = resample_state.accumulated[i];
                 reservoir.sample_count = take_reservoir_sample_count(position, normal) + 1;
-                reservoir.weight_sum = path_target_function(reservoir.path) / resample_state.pdf;
+                reservoir.weight_sum = path_target_function(reservoir.path) / resample_state.scatter_density;
                 update_reservoir_weight(reservoir);
 
                 // Insert as a reservoir update.

@@ -47,7 +47,7 @@ vec3 cosine_hemisphere_sample(inout Generator generator) {
     return vec3(d, sqrt(max(0.0, 1.0 - d.x * d.x - d.y * d.y)));
 }
 
-float cosine_hemisphere_pdf(float normal_dot_scatter) {
+float cosine_hemisphere_density(float normal_dot_scatter) {
     return normal_dot_scatter / PI;
 }
 
@@ -56,9 +56,9 @@ float cosine_hemisphere_pdf(float normal_dot_scatter) {
 // perfect mirror to generate a scatter ray.
 //
 // A popular solution is to use the VNDF (Visible Normal Distribution Function)
-// algorithm presented by (Heitz, 2018)[https://jcgt.org/published/0007/04/01/].
+// algorithm presented by (Heitz, 2018) - https://jcgt.org/published/0007/04/01/.
 // This is a variation based on (Dupuy, 2023)
-// [https://cdrdv2-public.intel.com/782052/sampling-visible-ggx-normals.pdf].
+// - https://cdrdv2-public.intel.com/782052/sampling-visible-ggx-normals.pdf.
 //
 // It samples a hemisphere above a certain point, or specifically,
 // a spherical cap with height `-view.z`.
@@ -85,15 +85,15 @@ vec3 ggx_sample(vec3 view, float roughness, out vec3 half_vector, inout Generato
 }
 
 // The PDF of `ggx_sample`. All vectors are expected to be in local space.
-float ggx_pdf(vec3 view, vec3 half_vector, float roughness) {
+float ggx_density(vec3 view, vec3 half_vector, float roughness) {
     // Handle the situation with delta reflections for materials with very low
     // roughness.
     if (roughness <= ROUGHNESS_DELTA_CUTOFF) return 1.0;
-	float pdf = ggx_visibility_unidirectional(roughness, view.z)
+	float density = ggx_visibility_unidirectional(roughness, view.z)
         * ggx_normal_dist(roughness, half_vector.z);
 	// Account for reflection.
     float reflection_jacobian = 4.0 * dot(view, half_vector);
-    return pdf / reflection_jacobian;
+    return density / reflection_jacobian;
 }
 
 #endif

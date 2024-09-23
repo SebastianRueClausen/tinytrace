@@ -23,7 +23,8 @@ pub(super) struct BounceSurface {
 pub(super) struct Path {
     origin: BounceSurface,
     destination: BounceSurface,
-    radiance: Vec3,
+    radiance: [f16; 3],
+    bounce_count: u16,
     generator: u32,
 }
 
@@ -33,7 +34,8 @@ pub(super) struct Reservoir {
     path: Path,
     weight_sum: f32,
     weight: f32,
-    sample_count: u32,
+    sample_count: u16,
+    padding: u16,
 }
 
 pub struct RestirState {

@@ -4,29 +4,27 @@
 #include "random"
 #include "octahedron"
 #include "math"
+#include "brdf"
 
-struct BounceSurface {
+struct PathVertex {
     float position[3];
     f16vec2 normal;
 };
 
-BounceSurface create_bounce_surface(vec3 position, vec3 normal) {
-    return BounceSurface(
-        float[3](position.x, position.y, position.z),
-        f16vec2(octahedron_encode(normal))
-    );
+PathVertex create_path_vertex(vec3 position, vec3 normal) {
+    return PathVertex(float[3](position.x, position.y, position.z), f16vec2(octahedron_encode(normal)));
 }
 
-vec3 bounce_surface_position(in BounceSurface bounce_surface) {
-    return vec3(bounce_surface.position[0], bounce_surface.position[1], bounce_surface.position[2]);
+vec3 path_vertex_position(in PathVertex path_vertex) {
+    return vec3(path_vertex.position[0], path_vertex.position[1], path_vertex.position[2]);
 }
 
-vec3 bounce_surface_normal(in BounceSurface bounce_surface) {
-    return vec3(octahedron_decode(vec2(bounce_surface.normal)));
+vec3 path_vertex_normal(in PathVertex path_vertex) {
+    return vec3(octahedron_decode(vec2(path_vertex.normal)));
 }
 
 struct Path {
-    BounceSurface origin, destination;
+    PathVertex origin, destination;
     float16_t radiance[3];
     uint16_t bounce_count;
     Generator generator;
@@ -83,14 +81,14 @@ void merge_reservoirs(inout Reservoir reservoir, inout Generator generator, Rese
 }
 
 float path_jacobian(vec3 sample_position, Path path) {
-    vec3 destination_position = bounce_surface_position(path.destination);
-    vec3 destination_normal = bounce_surface_normal(path.destination);
+    vec3 destination_position = path_vertex_position(path.destination);
+    vec3 destination_normal = path_vertex_normal(path.destination);
 
     vec3 sample_to_destination = sample_position - destination_position;
     float sample_distance = length(sample_to_destination);
     float sample_cos_phi = saturate(abs(dot(sample_to_destination, destination_normal) / sample_distance));
 
-    vec3 path_to_destination = bounce_surface_position(path.origin) - destination_position;
+    vec3 path_to_destination = path_vertex_position(path.origin) - destination_position;
     float path_distance = length(path_to_destination);
     float path_cos_phi = saturate(abs(dot(path_to_destination, destination_normal) / path_distance));
 
@@ -116,8 +114,8 @@ bool can_reconnect_to_path(vec3 sample_position, vec3 sample_normal, uint bounce
             has_enough_bounces = bounce_budget >= uint(path.bounce_count);
             break;
     };
-    float reconnection_distance = length(sample_position - bounce_surface_position(path.destination));
-    float cos_theta = dot(sample_normal, bounce_surface_normal(path.origin));
+    float reconnection_distance = length(sample_position - path_vertex_position(path.destination));
+    float cos_theta = dot(sample_normal, path_vertex_normal(path.origin));
     return reconnection_distance > 0.2 && cos_theta > 0.906 && has_enough_bounces;
 }
 
@@ -127,6 +125,79 @@ vec3 reservoir_hash_grid_position_jitter(inout Generator generator) {
 
 float reservoir_hash_grid_level_jitter(inout Generator generator) {
     return random_float(generator) * 0.5 - 0.25;
+}
+
+struct PathCandidate {
+    vec3 accumulated, attenuation, previous_normal;
+    // This is true if the previous bounce was "diffuse", which in this context means that the
+    // surface roughness is relatively high. This makes it so that when reconnecting, the different
+    // solid angle won't fall outside the material BRDF.
+    bool previous_bounce_was_diffuse;
+    // The found path origin and destination if a path has been found.
+    PathVertex origin, destination;
+    // The generator from just before generating a path from `destination`.
+    Generator generator;
+    float scatter_density;
+    uint16_t first_bounce, last_bounce;
+    // True if a path has been found.
+    bool is_found;
+};
+
+PathCandidate create_empty_path_candidate() {
+    PathCandidate candidate;
+    candidate.accumulated = vec3(0.0);
+    candidate.attenuation = vec3(1.0);
+    candidate.first_bounce = uint16_t(0);
+    candidate.last_bounce = uint16_t(0);
+    candidate.is_found = false;
+    return candidate;
+}
+
+void add_light_to_path_candidate(inout PathCandidate path_candidate, vec3 light, uint bounce) {
+    vec3 contribution = light * path_candidate.attenuation;
+    path_candidate.last_bounce = length_squared(contribution) > 0.0 ? uint16_t(bounce) : path_candidate.last_bounce;
+    path_candidate.accumulated += contribution;
+}
+
+bool can_form_path_candidate(PathCandidate path_candidate, uint bounce, LobeType lobe_type, float section_distance_squared) {
+    // Only find a simple resample path per trace for now
+    return !path_candidate.is_found
+        // It isn't possible to reconnect the first bounce.
+        && bounce != 0
+        // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
+        // reconnecting doesn't cause the BRDF to become zero.
+        && path_candidate.previous_bounce_was_diffuse
+        // The current bounce must be diffuse meaning that it samples the diffuse lope. This
+        // is required to create a successfull reconnection because diffuse sampling doesn't
+        // depend on the incidence vector, which will be different because of the reconnection.
+        && lobe_type == DIFFUSE_LOBE
+        // Very short reconnection paths can cause a bunch of problems.
+        && section_distance_squared > 0.025;
+}
+
+Reservoir create_reservoir_from_path_candidate(PathCandidate path_candidate, uint16_t sample_count) {
+    Reservoir reservoir;
+    reservoir.path.origin = path_candidate.origin;
+    reservoir.path.destination = path_candidate.destination;
+    reservoir.path.generator = path_candidate.generator;
+    reservoir.path.bounce_count = path_candidate.last_bounce - path_candidate.first_bounce;
+    for (uint i = 0; i < 3; i++) reservoir.path.radiance[i] = float16_t(path_candidate.accumulated[i]);
+    reservoir.sample_count = sample_count;
+    reservoir.weight_sum = path_target_function(reservoir.path) / path_candidate.scatter_density;
+    update_reservoir_weight(reservoir);
+    return reservoir;
+}
+
+struct ReplayPath {
+    PathVertex reconnect_location;
+    vec3 radiance;
+    bool is_found;
+};
+
+ReplayPath create_replay_path() {
+    ReplayPath replay_path;
+    replay_path.is_found = false;
+    return replay_path;
 }
 
 #endif

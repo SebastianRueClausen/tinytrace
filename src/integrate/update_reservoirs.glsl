@@ -18,7 +18,7 @@ void main() {
     uint base_index = cell_index * constants.reservoir_updates_per_cell;
     for (uint update_index = base_index; update_index < base_index + update_count; update_index++) {
         Reservoir reservoir_update = reservoir_updates[update_index];
-        vec3 origin_position = bounce_surface_position(reservoir_update.path.origin);
+        vec3 origin_position = path_vertex_position(reservoir_update.path.origin);
         vec3 offset = reservoir_hash_grid_position_jitter(generator);
         float level_offset = reservoir_hash_grid_level_jitter(generator);
         uint64_t key = hash_grid_key(hash_grid_cell(

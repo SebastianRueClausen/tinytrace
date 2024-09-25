@@ -1,9 +1,9 @@
 #ifndef BRDF
 #define BRDF
 
-#include "constants"
 #include "random"
 #include "math"
+#include "brdf"
 
 // The cutoff for roughness where a material is treated as a perfect mirror.
 const float ROUGHNESS_DELTA_CUTOFF = 0.01;

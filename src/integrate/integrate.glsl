@@ -1,9 +1,9 @@
+#include "restir"
 #include "scene"
 #include "brdf"
 #include "math"
 #include "sample"
 #include "debug"
-#include "restir"
 #include "constants"
 
 #include "<bindings>"
@@ -253,44 +253,6 @@ struct TracePathConfig {
     bool find_resample_path, resample_path;
 };
 
-struct ResamplePath {
-    vec3 accumulated, attenuation, previous_normal;
-    // This is true if the previous bounce was "diffuse", which in this context means that the
-    // surface roughness is relatively high. This makes it so that when reconnecting, the different
-    // solid angle won't fall outside the material BRDF.
-    bool previous_bounce_was_diffuse;
-    // The found path origin and destination if a path has been found.
-    BounceSurface origin, destination;
-    // The generator from just before generating a path from `destination`.
-    Generator generator;
-    float scatter_density;
-    uint16_t first_bounce, last_bounce;
-    // True if a path has been found.
-    bool is_found;
-};
-
-ResamplePath create_empty_resample_path() {
-    ResamplePath resample_path;
-    resample_path.accumulated = vec3(0.0);
-    resample_path.attenuation = vec3(1.0);
-    resample_path.first_bounce = uint16_t(0);
-    resample_path.last_bounce = uint16_t(0);
-    resample_path.is_found = false;
-    return resample_path;
-}
-
-struct ReplayPath {
-    BounceSurface reconnect_location;
-    vec3 radiance;
-    bool is_found;
-};
-
-ReplayPath create_replay_path() {
-    ReplayPath replay_path;
-    replay_path.is_found = false;
-    return replay_path;
-}
-
 struct PathState {
     vec3 accumulated, attenuation;
     // The two generators. `generator` is used to everything that doens't change the path.
@@ -342,21 +304,19 @@ LobeType sample_scatter_direction(
 }
 
 // Trace the next path segment. Returns true false if the path has left the scene.
-bool next_path_segment(inout PathState path_state, inout ResamplePath resample_path, TracePathConfig config, uint bounce) {
+bool next_path_segment(inout PathState path_state, inout PathCandidate path_candidate, TracePathConfig config, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
         vec3 sky_color = vec3(0.0);
         path_state.accumulated += sky_color * path_state.attenuation;
-        if (resample_path.is_found) {
-            vec3 contribution = sky_color * resample_path.attenuation;
-            resample_path.last_bounce = length_squared(contribution) > 0.0 ? uint16_t(bounce) : resample_path.last_bounce;
-            resample_path.accumulated += contribution;
+        if (path_candidate.is_found) {
+            add_light_to_path_candidate(path_candidate, sky_color, bounce);
         }
         return false;
     }
 
     if (constants.restir_replay == REPLAY_FIRST && path_state.replay_path.is_found) {
-        if (length(bounce_surface_position(path_state.replay_path.reconnect_location) - hit.world_position) < 0.01) {
+        if (length(path_vertex_position(path_state.replay_path.reconnect_location) - hit.world_position) < 0.01) {
             path_state.accumulated += path_state.attenuation * path_state.replay_path.radiance;
             return false;
         } else {
@@ -406,7 +366,7 @@ bool next_path_segment(inout PathState path_state, inout ResamplePath resample_p
         // Check that we haven't already reconnected.
         && !path_state.replay_path.is_found
         // Check that we aren't "recording" a resample path.
-        && !resample_path.is_found;
+        && !path_candidate.is_found;
     if (can_reconnect) {
         uint64_t key = hash_grid_key(hash_grid_cell(
             normal_bias(hit.world_position, surface_basis.normal),
@@ -425,7 +385,7 @@ bool next_path_segment(inout PathState path_state, inout ResamplePath resample_p
             if (can_reconnect) {
                 path_state.path_generator = reservoir.path.generator;
                 local_scatter = transform_from_basis(surface_basis, normalize(
-                    bounce_surface_position(reservoir.path.destination) - hit.world_position
+                    path_vertex_position(reservoir.path.destination) - hit.world_position
                 ));
                 local_half_vector = normalize(local_scatter + local_view);
                 float jacobian = path_jacobian(hit.world_position, reservoir.path);
@@ -447,20 +407,16 @@ bool next_path_segment(inout PathState path_state, inout ResamplePath resample_p
         vec3 direct_light =
             direct_light_contribution(hit.world_position, surface_basis.normal, surface, path_state.path_generator);
         path_state.accumulated += path_state.attenuation * direct_light;
-        if (resample_path.is_found) {
-            vec3 contribution = direct_light * resample_path.attenuation;
-            resample_path.last_bounce = length_squared(contribution) > 0.0 ? uint16_t(bounce) : resample_path.last_bounce;
-            resample_path.accumulated += contribution;
+        if (path_candidate.is_found) {
+            add_light_to_path_candidate(path_candidate, direct_light, bounce);
         }
     }
 
     // TODO: Figure out how to handle hitting light sources directly.
     if (bounce == 0 || !perform_next_event_estimation) {
         path_state.accumulated += emissive * path_state.attenuation;
-        if (resample_path.is_found) {
-            vec3 contribution = emissive * resample_path.attenuation;
-            resample_path.last_bounce = length_squared(contribution) > 0.0 ? uint16_t(bounce) : resample_path.last_bounce;
-            resample_path.accumulated += contribution;
+        if (path_candidate.is_found) {
+            add_light_to_path_candidate(path_candidate, emissive, bounce);
         }
     }
 
@@ -469,30 +425,18 @@ bool next_path_segment(inout PathState path_state, inout ResamplePath resample_p
         lobe_type = sample_scatter_direction(surface, path_state.path_generator, local_view, local_scatter, local_half_vector, scatter_density);
     }
 
-    bool can_form_resample_path = config.find_resample_path
-        // Only find a simple resample path per trace for now
-        && !resample_path.is_found
-        // Don't resample if a path is being replayed.
+    float section_distance_squared = length_squared(hit.world_position - path_state.ray.origin);
+    bool has_candidate_path = config.find_resample_path
         && !path_state.replay_path.is_found
-        // It isn't possible to reconnect the first bounce.
-        && bounce != 0
-        // The previous bounce must be counted as "diffuse" e.g. relatively rough so that
-        // reconnecting doesn't cause the BRDF to become zero.
-        && resample_path.previous_bounce_was_diffuse
-        // The current bounce must be diffuse meaning that it samples the diffuse lope. This
-        // is required to create a successfull reconnecting because diffuse sampling doesn't
-        // depend on the incidence vector, which will be different because of the reconnection.
-        && lobe_type == DIFFUSE_LOBE
-        // Very short reconnection paths can cause a bunch of problems.
-        && length_squared(hit.world_position - path_state.ray.origin) > 0.0025;
-    if (can_form_resample_path) {
-        resample_path.origin = create_bounce_surface(path_state.ray.origin, resample_path.previous_normal);
-        resample_path.destination = create_bounce_surface(hit.world_position, surface_basis.normal);
-        resample_path.generator = before_sample_generator;
-        resample_path.scatter_density = scatter_density;
-        resample_path.first_bounce = uint16_t(bounce);
-        resample_path.last_bounce = resample_path.first_bounce;
-        resample_path.is_found = true;
+        && can_form_path_candidate(path_candidate, bounce, lobe_type, section_distance_squared);
+    if (has_candidate_path) {
+        path_candidate.origin = create_path_vertex(path_state.ray.origin, path_candidate.previous_normal);
+        path_candidate.destination = create_path_vertex(hit.world_position, surface_basis.normal);
+        path_candidate.generator = before_sample_generator;
+        path_candidate.scatter_density = scatter_density;
+        path_candidate.first_bounce = uint16_t(bounce);
+        path_candidate.last_bounce = path_candidate.first_bounce;
+        path_candidate.is_found = true;
     }
 
     path_state.ray.direction = transform_to_basis(surface_basis, local_scatter);
@@ -513,10 +457,10 @@ bool next_path_segment(inout PathState path_state, inout ResamplePath resample_p
     }
 
     path_state.attenuation *= attenuation_factor;
-    if (resample_path.is_found) resample_path.attenuation *= attenuation_factor;
+    if (path_candidate.is_found) path_candidate.attenuation *= attenuation_factor;
 
-    resample_path.previous_normal = surface_basis.normal;
-    resample_path.previous_bounce_was_diffuse = surface.roughness > 0.25;
+    path_candidate.previous_normal = surface_basis.normal;
+    path_candidate.previous_bounce_was_diffuse = surface.roughness > 0.25;
 
     // Heuristic for mip level.
     path_state.mip_level += surface.roughness;
@@ -547,27 +491,20 @@ void main() {
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
 
         PathState path_state = create_path_state(generator, path_generator, ndc, ray);
-        ResamplePath resample_path = create_empty_resample_path();
+        PathCandidate path_candidate = create_empty_path_candidate();
 
         for (uint bounce = 0; bounce < constants.bounce_count; bounce++) {
-            if (!next_path_segment(path_state, resample_path, trace_path_config, bounce)) break;
+            if (!next_path_segment(path_state, path_candidate, trace_path_config, bounce)) break;
         }
 
         accumulated += path_state.accumulated;
 
-        if (resample_path.is_found) {
-            vec3 position = bounce_surface_position(resample_path.origin);
-            vec3 normal = bounce_surface_normal(resample_path.origin);
-            if (length_squared(resample_path.accumulated) > 0.0) {
-                Reservoir reservoir;
-                reservoir.path.origin = resample_path.origin;
-                reservoir.path.destination = resample_path.destination;
-                reservoir.path.generator = resample_path.generator;
-                reservoir.path.bounce_count = resample_path.last_bounce - resample_path.first_bounce;
-                for (uint i = 0; i < 3; i++) reservoir.path.radiance[i] = float16_t(resample_path.accumulated[i]);
-                reservoir.sample_count = uint16_t(take_reservoir_sample_count(position, normal) + 1);
-                reservoir.weight_sum = path_target_function(reservoir.path) / resample_path.scatter_density;
-                update_reservoir_weight(reservoir);
+        if (path_candidate.is_found) {
+            vec3 position = path_vertex_position(path_candidate.origin);
+            vec3 normal = path_vertex_normal(path_candidate.origin);
+            if (length_squared(path_candidate.accumulated) > 0.0) {
+                uint16_t sample_count = uint16_t(take_reservoir_sample_count(position, normal) + 1);
+                Reservoir reservoir = create_reservoir_from_path_candidate(path_candidate, sample_count);
 
                 // Insert as a reservoir update.
                 uint64_t key = hash_grid_key(hash_grid_cell(

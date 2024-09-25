@@ -1,9 +1,9 @@
 #ifndef SAMPLE
 #define SAMPLE
 
+#include "brdf"
 #include "math"
 #include "random"
-#include "brdf"
 
 #define SampleStrategy uint
 const SampleStrategy UNIFORM_HEMISPHERE_SAMPLING = 1;

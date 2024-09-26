@@ -5,6 +5,20 @@
 #include "octahedron"
 #include "math"
 #include "brdf"
+#include "hash_grid"
+
+#define RestirReplay uint
+const RestirReplay REPLAY_NONE = 1;
+const RestirReplay REPLAY_FIRST = 2;
+const RestirReplay REPLAY_FULL = 3;
+
+struct RestirConstants {
+    float scene_scale;
+    uint updates_per_cell;
+    uint reservoirs_per_cell;
+    RestirReplay replay;
+    HashGrid reservoir_hash_grid, update_hash_grid;
+};
 
 struct PathVertex {
     float position[3];
@@ -95,11 +109,6 @@ float path_jacobian(vec3 sample_position, Path path) {
     float div = path_cos_phi * pow2(sample_distance);
     return div > 0.0 ? sample_cos_phi * pow2(path_distance) / div : 0.0;
 }
-
-#define RestirReplay uint
-const RestirReplay REPLAY_NONE = 1;
-const RestirReplay REPLAY_FIRST = 2;
-const RestirReplay REPLAY_FULL = 3;
 
 bool can_reconnect_to_path(vec3 sample_position, vec3 sample_normal, uint bounce_budget, RestirReplay replay, Path path) {
     bool has_enough_bounces;

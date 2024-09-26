@@ -1,7 +1,7 @@
 mod restir;
 
 use crate::scene::Scene;
-use crate::{Context, Error, RestirConfig};
+use crate::{Config, Context, Error, RestirConfig};
 use restir::RestirState;
 use tinytrace_backend::{
     binding, Binding, BindingType, Buffer, Extent, Handle, Image, Lifetime, Shader, ShaderRequest,
@@ -16,6 +16,7 @@ impl Integrator {
     pub fn new(context: &mut Context, restir_config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
+            binding!(uniform_buffer, RestirConstants, restir_constants),
             binding!(storage_buffer, Vertex, vertices, true, false),
             binding!(storage_buffer, uint, indices, true, false),
             binding!(storage_buffer, Material, materials, true, false),
@@ -60,14 +61,16 @@ impl Integrator {
     pub fn integrate(
         &self,
         context: &mut Context,
+        config: &Config,
         constants: &Handle<Buffer>,
         scene: &Scene,
         target: &Handle<Image>,
     ) -> Result<(), Error> {
-        self.restir_state.clear_updates(context)?;
+        self.restir_state.prepare(context, &config.restir)?;
         context
             .bind_shader(&self.integrate)
             .bind_buffer("constants", constants)
+            .bind_buffer("restir_constants", &self.restir_state.constants)
             .bind_buffer("vertices", &scene.vertices)
             .bind_buffer("indices", &scene.indices)
             .bind_buffer("materials", &scene.materials)

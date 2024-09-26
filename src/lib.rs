@@ -17,7 +17,6 @@ pub use camera::{Camera, CameraMove};
 pub use config::{Config, LightSampling, RestirConfig, RestirReplay, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
-use hash_grid::HashGridLayout;
 use integrate::Integrator;
 use post_process::PostProcess;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -138,16 +137,11 @@ impl Renderer {
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
-            reservoir_hash_grid: self.integrator.restir_state.reservoir_hash_grid.layout,
-            reservoir_update_hash_grid: self.integrator.restir_state.update_hash_grid.layout,
             use_world_space_restir: self.config.restir.enabled.into(),
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             tonemap: self.config.tonemap.into(),
             sample_strategy: self.config.sample_strategy,
-            reservoirs_per_cell: self.config.restir.reservoirs_per_cell,
-            reservoir_updates_per_cell: self.config.restir.updates_per_cell,
-            restir_replay: self.config.restir.replay,
             light_sampling: self.config.light_sampling,
             proj_view,
             view,
@@ -163,6 +157,7 @@ impl Renderer {
         self.context.insert_timestamp("before integrate");
         self.integrator.integrate(
             &mut self.context,
+            &self.config,
             &self.constants,
             &self.scene,
             &self.render_target,
@@ -254,17 +249,12 @@ struct Constants {
     accumulated_frame_count: u32,
     sample_count: u32,
     bounce_count: u32,
-    reservoir_hash_grid: HashGridLayout,
-    reservoir_update_hash_grid: HashGridLayout,
     screen_size: UVec2,
     use_world_space_restir: u32,
     tonemap: u32,
     sample_strategy: SampleStrategy,
-    reservoir_updates_per_cell: u32,
-    reservoirs_per_cell: u32,
-    restir_replay: RestirReplay,
     light_sampling: LightSampling,
-    padding: [u32; 3],
+    padding: [u32; 2],
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

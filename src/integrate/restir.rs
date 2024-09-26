@@ -5,10 +5,10 @@ use glam::Vec3;
 use half::f16;
 
 use crate::hash_grid::{HashGrid, HashGridLayout};
-use crate::{Error, RestirConfig};
+use crate::{Error, RestirConfig, RestirReplay};
 use tinytrace_backend::{
-    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, Context, Extent, Handle,
-    Lifetime, MemoryLocation, Shader, ShaderRequest,
+    binding, Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Extent,
+    Handle, Lifetime, MemoryLocation, Shader, ShaderRequest,
 };
 
 #[repr(C)]
@@ -38,6 +38,34 @@ pub(super) struct Reservoir {
     padding: u16,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::NoUninit)]
+struct RestirConstants {
+    scene_scale: f32,
+    updates_per_cell: u32,
+    reservoirs_per_cell: u32,
+    replay: RestirReplay,
+    reservoir_hash_grid: HashGridLayout,
+    update_hash_grid: HashGridLayout,
+}
+
+impl RestirConstants {
+    fn new(
+        config: &RestirConfig,
+        reservoir_hash_grid: &HashGrid,
+        update_hash_grid: &HashGrid,
+    ) -> Self {
+        Self {
+            scene_scale: config.scene_scale,
+            updates_per_cell: config.updates_per_cell,
+            reservoirs_per_cell: config.reservoirs_per_cell,
+            reservoir_hash_grid: reservoir_hash_grid.layout,
+            update_hash_grid: update_hash_grid.layout,
+            replay: config.replay,
+        }
+    }
+}
+
 pub struct RestirState {
     pub reservoir_hash_grid: HashGrid,
     pub update_hash_grid: HashGrid,
@@ -45,6 +73,7 @@ pub struct RestirState {
     pub updates: Handle<Buffer>,
     pub update_counts: Handle<Buffer>,
     pub reservoir_sample_counts: Handle<Buffer>,
+    pub constants: Handle<Buffer>,
     pub update_reservoirs: Handle<Shader>,
 }
 
@@ -67,6 +96,7 @@ impl RestirState {
     pub fn new(context: &mut Context, config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
+            binding!(uniform_buffer, RestirConstants, restir_constants),
             binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
             binding!(storage_buffer, uint64_t, reservoir_update_keys, true, true),
             binding!(storage_buffer, uint, reservoir_update_counts, true, true),
@@ -112,6 +142,7 @@ impl RestirState {
                 config.reservoir_hash_grid_capacity,
                 mem::size_of::<u32>(),
             )?,
+            constants: create_buffer(context, 1, mem::size_of::<RestirConstants>())?,
         })
     }
 
@@ -123,6 +154,7 @@ impl RestirState {
         context
             .bind_shader(&self.update_reservoirs)
             .bind_buffer("constants", constants)
+            .bind_buffer("restir_constants", &self.constants)
             .bind_buffer("reservoir_keys", &self.reservoir_hash_grid.keys)
             .bind_buffer("reservoir_update_keys", &self.update_hash_grid.keys)
             .bind_buffer("reservoir_update_counts", &self.update_counts)
@@ -132,8 +164,15 @@ impl RestirState {
         Ok(())
     }
 
-    pub fn clear_updates(&self, context: &mut Context) -> Result<(), Error> {
-        context.fill_buffer(&self.update_counts, 0)?;
+    pub fn prepare(&self, context: &mut Context, config: &RestirConfig) -> Result<(), Error> {
+        let constants =
+            RestirConstants::new(config, &self.reservoir_hash_grid, &self.update_hash_grid);
+        context
+            .fill_buffer(&self.update_counts, 0)?
+            .write_buffers(&[BufferWrite {
+                buffer: self.constants.clone(),
+                data: bytemuck::bytes_of(&constants).into(),
+            }])?;
         self.update_hash_grid.clear(context)?;
         Ok(())
     }

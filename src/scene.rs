@@ -18,6 +18,7 @@ pub struct Scene {
     pub materials: Handle<Buffer>,
     pub instances: Handle<Buffer>,
     pub emissive_triangles: Handle<Buffer>,
+    pub scene_data: Handle<Buffer>,
     pub textures: Vec<Handle<Image>>,
     pub texture_sampler: Handle<Sampler>,
     pub blases: Vec<Handle<Blas>>,
@@ -51,6 +52,15 @@ impl Scene {
         let instances = create_buffer(context, &scene_instances)?;
         let emissive_triangles = create_buffer(context, &emissive_triangle_data)?;
 
+        let scene_data = context.create_buffer(
+            Lifetime::Scene,
+            &BufferRequest {
+                size: mem::size_of::<SceneData>() as u64,
+                ty: BufferType::Uniform,
+                memory_location: MemoryLocation::Device,
+            },
+        )?;
+
         context.write_buffers(&[
             scene_buffer_write(&positions, &scene.positions),
             scene_buffer_write(&vertices, &scene.vertices),
@@ -58,6 +68,18 @@ impl Scene {
             scene_buffer_write(&materials, &scene.materials),
             scene_buffer_write(&instances, &scene_instances),
             scene_buffer_write(&emissive_triangles, &emissive_triangle_data),
+            scene_buffer_write(
+                &scene_data,
+                &[SceneData {
+                    vertices: context.buffer_device_address(&vertices),
+                    indices: context.buffer_device_address(&indices),
+                    instances: context.buffer_device_address(&instances),
+                    emissive_triangles: context.buffer_device_address(&emissive_triangles),
+                    materials: context.buffer_device_address(&materials),
+                    emissive_triangle_count: emissive_triangle_data.len() as u32,
+                    padding: 0,
+                }],
+            ),
         ])?;
 
         let textures: Vec<_> = scene
@@ -137,6 +159,7 @@ impl Scene {
             materials,
             instances,
             emissive_triangles,
+            scene_data,
             textures,
             texture_sampler,
             blases,
@@ -286,4 +309,16 @@ impl Instance {
             }
         })
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
+struct SceneData {
+    vertices: u64,
+    indices: u64,
+    instances: u64,
+    emissive_triangles: u64,
+    materials: u64,
+    emissive_triangle_count: u32,
+    padding: u32,
 }

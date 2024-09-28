@@ -134,6 +134,10 @@ impl Context {
         let buffer = Buffer::new(&self.device, &mut pool.allocator, request)?;
         Ok(Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
     }
+
+    pub fn buffer_device_address(&self, buffer: &Handle<Buffer>) -> u64 {
+        self.buffer(buffer).device_address(&self.device)
+    }
 }
 
 impl Buffer {

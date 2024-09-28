@@ -12,6 +12,7 @@ const PRELUDE: &str = r#"
 #extension GL_EXT_ray_tracing_position_fetch: require
 #extension GL_ARB_gpu_shader_int64: require
 #extension GL_NV_shader_atomic_int64: require
+#extension GL_EXT_buffer_reference2: require
 "#;
 
 fn render_binding(name: &str, ty: &BindingType, index: u32) -> String {

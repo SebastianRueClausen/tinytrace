@@ -26,7 +26,7 @@ struct RayHit {
     vec3 world_position;
     Basis tangent_space;
     vec2 texcoord, texcoord_ddx, texcoord_ddy;
-    int instance;
+    uint instance, material;
 };
 
 struct Ray {
@@ -65,8 +65,9 @@ vec3 interpolate(vec3 barycentric, vec3 a, vec3 b, vec3 c) {
 RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     RayHit hit;
 
-    hit.instance = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
-    Instance instance = instances[hit.instance];
+    hit.instance = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+    Instance instance = scene.instances.instances[hit.instance];
+    hit.material = instance.material;
     mat4x3 transform = mat4x3(instance.transform);
 
     vec3 positions[3];
@@ -76,8 +77,12 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     for (uint i = 0; i < 3; i++) positions[i] = transform * vec4(positions[i], 1.0);
 
     uint base_index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(query, true) + instance.index_offset;
-    uvec3 triangle_indices = uvec3(indices[base_index + 0], indices[base_index + 1], indices[base_index + 2]) + instance.vertex_offset;
-    Vertex triangle_vertices[3] = Vertex[3](vertices[triangle_indices[0]], vertices[triangle_indices[1]], vertices[triangle_indices[2]]);
+    uvec3 triangle_indices = uvec3(
+        scene.indices.indices[base_index + 0], scene.indices.indices[base_index + 1], scene.indices.indices[base_index + 2]
+    ) + instance.vertex_offset;
+    Vertex triangle_vertices[3] = Vertex[3](
+        scene.vertices.vertices[triangle_indices[0]], scene.vertices.vertices[triangle_indices[1]], scene.vertices.vertices[triangle_indices[2]]
+    );
 
     vec3 barycentric = vec3(0.0, rayQueryGetIntersectionBarycentricsEXT(query, true));
     barycentric.x = 1.0 - barycentric.y - barycentric.z;
@@ -156,10 +161,9 @@ struct DirectLightSample {
 };
 
 DirectLightSample sample_random_light(inout Generator generator) {
-    uint triangle_count = emissive_triangles.length();
-    EmissiveTriangle triangle = emissive_triangles[random_uint(generator, triangle_count)];
+    EmissiveTriangle triangle = scene.emissive_triangles.data[random_uint(generator, scene.emissive_triangle_count)];
     vec3 barycentric = sample_triangle(generator);
-    mat4x3 transform = mat4x3(instances[triangle.instance].transform);
+    mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance].transform);
     vec3 positions[3] = vec3[3](
         transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
         transform * vec4(dequantize_snorm(triangle.positions[1]), 1.0),
@@ -170,7 +174,7 @@ DirectLightSample sample_random_light(inout Generator generator) {
     vec3 position = normal_bias(barycentric[0] * positions[0] + barycentric[1] * positions[1] + barycentric[2] * positions[2], normal);
     vec2 texcoord = interpolate(barycentric, triangle.texcoords[0], triangle.texcoords[1], triangle.texcoords[2]);
     return DirectLightSample(
-        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area, 1.0 / triangle_count
+        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area, 1.0 / scene.emissive_triangle_count
     );
 }
 
@@ -193,10 +197,10 @@ vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties sur
 
     uint instance_index = rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true);
     if (instance_index != light_sample.instance) return vec3(0.0);
-    uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true) + instances[instance_index].index_offset / 3;
+    uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true) + scene.instances.instances[instance_index].index_offset / 3;
     if (triangle_index % 0xffff != light_sample.hash) return vec3(0.0);
 
-    Material material = materials[instances[light_sample.instance].material];
+    Material material = scene.materials.materials[scene.instances.instances[light_sample.instance].material];
 
     // TODO: Figure out a good mip level.
     float mip_level = 4.0;
@@ -325,8 +329,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
         }
     }
 
-    Instance instance = instances[hit.instance];
-    Material material = materials[instance.material];
+    Material material = scene.materials.materials[hit.material];
 
     // Calculate mip level for the first bounce using ray differentials.
     if (bounce == 0) {

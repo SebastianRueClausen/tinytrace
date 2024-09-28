@@ -82,3 +82,32 @@ struct Instance {
 };
 
 const uint INVALID_INDEX = 4294967295;
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Vertices {
+    Vertex vertices[];
+};
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Indices {
+    uint indices[];
+};
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Instances {
+    Instance instances[];
+};
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer EmissiveTriangles {
+    EmissiveTriangle data[];
+};
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Materials {
+    Material materials[];
+};
+
+struct Scene {
+    Vertices vertices;
+    Indices indices;
+    Instances instances;
+    EmissiveTriangles emissive_triangles;
+    Materials materials;
+    uint emissive_triangle_count;
+};

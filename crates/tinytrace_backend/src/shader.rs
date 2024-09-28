@@ -222,6 +222,7 @@ enum BoundResource {
 pub(super) struct BoundShader {
     shader: Handle<Shader>,
     bound: HashMap<&'static str, BoundResource>,
+    indirect_buffers: HashMap<&'static str, (Handle<Buffer>, vk::AccessFlags2)>,
     /// `true` if this shader wast just dispatched.
     has_been_dispatched: bool,
     /// `true` if push constants have been pushed.
@@ -232,6 +233,7 @@ impl BoundShader {
     fn new(shader: Handle<Shader>) -> Self {
         Self {
             bound: HashMap::default(),
+            indirect_buffers: HashMap::default(),
             has_been_dispatched: false,
             constants_has_been_pushed: false,
             shader,
@@ -660,6 +662,24 @@ impl Context {
         self
     }
 
+    /// Register buffer accessed through buffer device addresses in bound shader. This is required
+    /// for synchronization.
+    pub fn register_indirect_buffer(
+        &mut self,
+        name: &'static str,
+        buffer: &Handle<Buffer>,
+        writes: bool,
+    ) -> &mut Self {
+        let mut access_flags = vk::AccessFlags2::SHADER_STORAGE_READ;
+        access_flags |= writes
+            .then_some(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .unwrap_or_default();
+        self.bound_shader_mut()
+            .indirect_buffers
+            .insert(name, (buffer.clone(), access_flags));
+        self
+    }
+
     fn set_descriptor(&self, offset: u64, layout: vk::PipelineLayout) {
         let point = vk::PipelineBindPoint::COMPUTE;
         let buffer = self.command_buffer().buffer;
@@ -689,7 +709,6 @@ impl Context {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access,
         };
-
         for resource in self.bound_shader().bound.values().cloned() {
             match resource {
                 BoundResource::Buffer(buffer, access) => {
@@ -704,7 +723,9 @@ impl Context {
                 }
             }
         }
-
+        for (buffer, access) in self.bound_shader().indirect_buffers.values().cloned() {
+            buffers.push((buffer, create_access(access)));
+        }
         self.access_resources(&images, &buffers, &[], &tlases)?;
 
         let bound_shader = self.bound_shader();

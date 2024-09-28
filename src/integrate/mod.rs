@@ -17,17 +17,7 @@ impl Integrator {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(uniform_buffer, RestirConstants, restir_constants),
-            binding!(storage_buffer, Vertex, vertices, true, false),
-            binding!(storage_buffer, uint, indices, true, false),
-            binding!(storage_buffer, Material, materials, true, false),
-            binding!(storage_buffer, Instance, instances, true, false),
-            binding!(
-                storage_buffer,
-                EmissiveTriangle,
-                emissive_triangles,
-                true,
-                false
-            ),
+            binding!(uniform_buffer, Scene, scene),
             binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
             binding!(storage_buffer, uint64_t, reservoir_update_keys, true, true),
             binding!(storage_buffer, Reservoir, reservoirs, true, true),
@@ -71,11 +61,12 @@ impl Integrator {
             .bind_shader(&self.integrate)
             .bind_buffer("constants", constants)
             .bind_buffer("restir_constants", &self.restir_state.constants)
-            .bind_buffer("vertices", &scene.vertices)
-            .bind_buffer("indices", &scene.indices)
-            .bind_buffer("materials", &scene.materials)
-            .bind_buffer("instances", &scene.instances)
-            .bind_buffer("emissive_triangles", &scene.emissive_triangles)
+            .bind_buffer("scene", &scene.scene_data)
+            .register_indirect_buffer("vertices", &scene.vertices, false)
+            .register_indirect_buffer("indices", &scene.indices, false)
+            .register_indirect_buffer("materials", &scene.materials, false)
+            .register_indirect_buffer("instances", &scene.instances, false)
+            .register_indirect_buffer("emissive_triangles", &scene.emissive_triangles, false)
             .bind_buffer(
                 "reservoir_keys",
                 &self.restir_state.reservoir_hash_grid.keys,

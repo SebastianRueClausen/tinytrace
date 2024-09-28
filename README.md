@@ -2,6 +2,12 @@
 A tiny realtime ray tracer.
 The goal is to write a fairly capable ray tracer in 5000-7000 lines of code by utilizing hardware ray tracing and modern techniques such as ReSTIR.
 
+## Example
+To run example GLTF scene viewer, run:
+```bash
+cargo run --release --example viewer
+```
+
 ## Vulkan
 The ray tracer uses vulkan to accelerate the ray tracing. To make the implementation simpler, tinytrace uses a few fairly new Vulkan extensions, although they should be supported on almost all GPUs that support hardware ray tracing.
 

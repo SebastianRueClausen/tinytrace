@@ -18,8 +18,8 @@ impl Integrator {
             binding!(uniform_buffer, Constants, constants),
             binding!(uniform_buffer, RestirConstants, restir_constants),
             binding!(uniform_buffer, Scene, scene),
-            binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
-            binding!(storage_buffer, uint64_t, reservoir_update_keys, true, true),
+            binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
+            binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
             binding!(storage_buffer, Reservoir, reservoirs, true, true),
             binding!(storage_buffer, Reservoir, reservoir_updates, true, true),
             binding!(storage_buffer, uint, reservoir_update_counts, true, true),
@@ -68,12 +68,22 @@ impl Integrator {
             .register_indirect_buffer("instances", &scene.instances, false)
             .register_indirect_buffer("emissive_triangles", &scene.emissive_triangles, false)
             .bind_buffer(
-                "reservoir_keys",
+                "reservoir_hash_grid",
+                &self.restir_state.reservoir_hash_grid.data,
+            )
+            .register_indirect_buffer(
+                "reservoir_hash_grid",
                 &self.restir_state.reservoir_hash_grid.keys,
+                false,
             )
             .bind_buffer(
-                "reservoir_update_keys",
+                "reservoir_update_hash_grid",
+                &self.restir_state.update_hash_grid.data,
+            )
+            .register_indirect_buffer(
+                "reservoir_update_hash_grid",
                 &self.restir_state.update_hash_grid.keys,
+                true,
             )
             .bind_buffer("reservoirs", &self.restir_state.reservoirs)
             .bind_buffer("reservoir_updates", &self.restir_state.updates)

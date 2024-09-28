@@ -1,10 +1,9 @@
 use std::mem;
 
-use ash::vk;
 use glam::Vec3;
 use half::f16;
 
-use crate::hash_grid::{HashGrid, HashGridLayout};
+use crate::hash_grid::HashGrid;
 use crate::{Error, RestirConfig, RestirReplay};
 use tinytrace_backend::{
     binding, Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Extent,
@@ -45,22 +44,14 @@ struct RestirConstants {
     updates_per_cell: u32,
     reservoirs_per_cell: u32,
     replay: RestirReplay,
-    reservoir_hash_grid: HashGridLayout,
-    update_hash_grid: HashGridLayout,
 }
 
 impl RestirConstants {
-    fn new(
-        config: &RestirConfig,
-        reservoir_hash_grid: &HashGrid,
-        update_hash_grid: &HashGrid,
-    ) -> Self {
+    fn new(config: &RestirConfig) -> Self {
         Self {
             scene_scale: config.scene_scale,
             updates_per_cell: config.updates_per_cell,
             reservoirs_per_cell: config.reservoirs_per_cell,
-            reservoir_hash_grid: reservoir_hash_grid.layout,
-            update_hash_grid: update_hash_grid.layout,
             replay: config.replay,
         }
     }
@@ -85,7 +76,7 @@ fn create_buffer(
     context.create_buffer(
         Lifetime::Renderer,
         &BufferRequest {
-            size: count as vk::DeviceSize * value_size as vk::DeviceSize,
+            size: count as u64 * value_size as u64,
             ty: BufferType::Storage,
             memory_location: MemoryLocation::Device,
         },
@@ -97,8 +88,8 @@ impl RestirState {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(uniform_buffer, RestirConstants, restir_constants),
-            binding!(storage_buffer, uint64_t, reservoir_keys, true, true),
-            binding!(storage_buffer, uint64_t, reservoir_update_keys, true, true),
+            binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
+            binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
             binding!(storage_buffer, uint, reservoir_update_counts, true, true),
             binding!(storage_buffer, Reservoir, reservoirs, true, true),
             binding!(storage_buffer, Reservoir, reservoir_updates, true, true),
@@ -116,11 +107,15 @@ impl RestirState {
             update_reservoirs,
             reservoir_hash_grid: HashGrid::new(
                 context,
-                HashGridLayout::new(config.reservoir_hash_grid_capacity, 32, config.scene_scale),
+                config.scene_scale,
+                config.reservoir_hash_grid_capacity,
+                32,
             )?,
             update_hash_grid: HashGrid::new(
                 context,
-                HashGridLayout::new(config.update_hash_grid_capacity, 1, config.scene_scale),
+                config.scene_scale,
+                config.reservoir_hash_grid_capacity,
+                32,
             )?,
             reservoirs: create_buffer(
                 context,
@@ -155,23 +150,27 @@ impl RestirState {
             .bind_shader(&self.update_reservoirs)
             .bind_buffer("constants", constants)
             .bind_buffer("restir_constants", &self.constants)
-            .bind_buffer("reservoir_keys", &self.reservoir_hash_grid.keys)
-            .bind_buffer("reservoir_update_keys", &self.update_hash_grid.keys)
+            .bind_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.data)
+            .register_indirect_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.keys, false)
+            .bind_buffer("reservoir_update_hash_grid", &self.update_hash_grid.data)
+            .register_indirect_buffer(
+                "reservoir_update_hash_grid",
+                &self.update_hash_grid.keys,
+                false,
+            )
             .bind_buffer("reservoir_update_counts", &self.update_counts)
             .bind_buffer("reservoirs", &self.reservoirs)
             .bind_buffer("reservoir_updates", &self.updates)
-            .dispatch(self.update_hash_grid.layout.capacity, 1)?;
+            .dispatch(self.update_hash_grid.capacity, 1)?;
         Ok(())
     }
 
     pub fn prepare(&self, context: &mut Context, config: &RestirConfig) -> Result<(), Error> {
-        let constants =
-            RestirConstants::new(config, &self.reservoir_hash_grid, &self.update_hash_grid);
         context
             .fill_buffer(&self.update_counts, 0)?
             .write_buffers(&[BufferWrite {
                 buffer: self.constants.clone(),
-                data: bytemuck::bytes_of(&constants).into(),
+                data: bytemuck::bytes_of(&RestirConstants::new(config)).into(),
             }])?;
         self.update_hash_grid.clear(context)?;
         Ok(())

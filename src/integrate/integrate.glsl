@@ -5,22 +5,9 @@
 #include "sample"
 #include "debug"
 #include "constants"
+#include "hash_grid"
 
 #include "<bindings>"
-
-#define HASH_GRID_BUFFER reservoir_keys
-#define HASH_GRID_INSERT insert_reservoir_cell
-#define HASH_GRID_FIND find_reservoir_cell
-#include "hash_grid"
-
-#undef HASH_GRID_BUFFER
-#undef HASH_GRID_INSERT
-#undef HASH_GRID_FIND
-
-#define HASH_GRID_BUFFER reservoir_update_keys
-#define HASH_GRID_INSERT insert_reservoir_update
-#define HASH_GRID_FIND find_reservoir_update
-#include "hash_grid"
 
 struct RayHit {
     vec3 world_position;
@@ -222,14 +209,14 @@ Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
 uint64_t get_reservoir_key(vec3 position, vec3 normal) {
     return hash_grid_key(hash_grid_cell(
         normal_bias(position, normal), constants.camera_position.xyz,
-        vec3(0.0), 0.0, restir_constants.reservoir_hash_grid
+        vec3(0.0), 0.0, reservoir_hash_grid
     ));
 }
 
 uint take_reservoir_sample_count(vec3 position, vec3 normal) {
     uint64_t key = get_reservoir_key(position, normal);
     uint cell_index;
-    if (insert_reservoir_cell(restir_constants.reservoir_hash_grid, key, cell_index)) {
+    if (hash_grid_insert(reservoir_hash_grid, key, cell_index)) {
         return atomicExchange(reservoir_sample_counts[cell_index], 0);
     } else {
         return 0;
@@ -239,7 +226,7 @@ uint take_reservoir_sample_count(vec3 position, vec3 normal) {
 void increment_reservoir_sample_count(vec3 position, vec3 normal) {
     uint64_t key = get_reservoir_key(position, normal);
     uint cell_index;
-    if (insert_reservoir_cell(restir_constants.reservoir_hash_grid, key, cell_index)) {
+    if (hash_grid_insert(reservoir_hash_grid, key, cell_index)) {
         atomicAdd(reservoir_sample_counts[cell_index], 1);
     }
 }
@@ -376,10 +363,10 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
             constants.camera_position.xyz,
             reservoir_hash_grid_position_jitter(path_state.generator),
             reservoir_hash_grid_level_jitter(path_state.generator),
-            restir_constants.reservoir_hash_grid
+            reservoir_hash_grid
         ));
         uint reservoir_cell_index;
-        if (find_reservoir_cell(restir_constants.reservoir_hash_grid, key, reservoir_cell_index)) {
+        if (hash_grid_find(reservoir_hash_grid, key, reservoir_cell_index)) {
             Reservoir reservoir = get_reservoir_from_cell(reservoir_cell_index, path_state.generator);
             // Reconnect with the sample in the reservoir if it's valid.
             uint bounce_budget = bounce - constants.bounce_count - 1;
@@ -511,9 +498,9 @@ void main() {
 
                 // Insert as a reservoir update.
                 uint64_t key = hash_grid_key(hash_grid_cell(
-                    position, constants.camera_position.xyz, vec3(0.0), 0.0, restir_constants.update_hash_grid
+                    position, constants.camera_position.xyz, vec3(0.0), 0.0, reservoir_update_hash_grid
                 ));
-                uint slot = hash_grid_hash(key) % restir_constants.update_hash_grid.capacity;
+                uint slot = hash_grid_hash(key) % reservoir_update_hash_grid.capacity;
                 uint update_index = atomicAdd(reservoir_update_counts[slot], 1);
                 if (update_index < restir_constants.updates_per_cell) {
                     uint base_index = restir_constants.updates_per_cell * slot;

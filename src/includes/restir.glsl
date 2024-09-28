@@ -5,7 +5,6 @@
 #include "octahedron"
 #include "math"
 #include "brdf"
-#include "hash_grid"
 
 #define RestirReplay uint
 const RestirReplay REPLAY_NONE = 1;
@@ -17,7 +16,6 @@ struct RestirConstants {
     uint updates_per_cell;
     uint reservoirs_per_cell;
     RestirReplay replay;
-    HashGrid reservoir_hash_grid, update_hash_grid;
 };
 
 struct PathVertex {

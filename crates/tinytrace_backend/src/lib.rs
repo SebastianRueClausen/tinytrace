@@ -51,7 +51,7 @@ use resource::Allocator;
 pub use resource::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Extent, Filter,
     Image, ImageFormat, ImageRequest, MemoryLocation, Offset, Sampler, SamplerRequest, Tlas,
-    TlasBuildMode, TlasInstance,
+    TlasBuildMode, TlasInstance, VertexFormat,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};

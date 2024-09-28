@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::{array, mem};
 
-use ash::vk;
 use glam::{Mat4, Quat, Vec3};
 use half::f16;
 
@@ -10,6 +9,7 @@ use tinytrace_backend::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, BufferWrite,
     Context, Extent, Filter, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime,
     MemoryLocation, Offset, Sampler, SamplerRequest, Tlas, TlasBuildMode, TlasInstance,
+    VertexFormat,
 };
 
 pub struct Scene {
@@ -116,8 +116,8 @@ impl Scene {
                 context.create_blas(
                     Lifetime::Scene,
                     &BlasRequest {
-                        vertex_format: vk::Format::R16G16B16_SNORM,
-                        vertex_stride: mem::size_of::<[i16; 3]>() as vk::DeviceSize,
+                        vertex_format: VertexFormat::Snorm16,
+                        vertex_stride: mem::size_of::<[i16; 3]>() as u64,
                         triangle_count: mesh.index_count / 3,
                         vertex_count: mesh.vertex_count,
                         first_vertex: mesh.vertex_offset,
@@ -137,8 +137,7 @@ impl Scene {
                 },
                 indices: BufferRange {
                     buffer: indices.clone(),
-                    offset: mesh.index_offset as vk::DeviceSize
-                        * mem::size_of::<u32>() as vk::DeviceSize,
+                    offset: mesh.index_offset as u64 * mem::size_of::<u32>() as u64,
                 },
             })
             .collect();
@@ -227,7 +226,7 @@ fn create_buffer<T>(
         Lifetime::Scene,
         &BufferRequest {
             memory_location: MemoryLocation::Device,
-            size: mem::size_of_val(data) as vk::DeviceSize,
+            size: mem::size_of_val(data) as u64,
             ty: BufferType::Storage,
         },
     )

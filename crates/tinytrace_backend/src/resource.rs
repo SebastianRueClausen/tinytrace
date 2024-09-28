@@ -610,9 +610,22 @@ fn acceleration_structure_device_address(
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum VertexFormat {
+    #[default]
+    Snorm16 = vk::Format::R16G16B16_SNORM.as_raw() as isize,
+    Float32 = vk::Format::R32G32B32_SFLOAT.as_raw() as isize,
+}
+
+impl From<VertexFormat> for vk::Format {
+    fn from(vertex_format: VertexFormat) -> Self {
+        Self::from_raw(vertex_format as i32)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct BlasRequest {
-    pub vertex_format: vk::Format,
+    pub vertex_format: VertexFormat,
     pub vertex_stride: u64,
     pub triangle_count: u32,
     pub vertex_count: u32,
@@ -642,7 +655,7 @@ impl Context {
         let geometry_data = vk::AccelerationStructureGeometryDataKHR {
             triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                 .vertex_stride(request.vertex_stride)
-                .vertex_format(request.vertex_format)
+                .vertex_format(request.vertex_format.into())
                 .max_vertex(request.vertex_count - 1)
                 .index_data(indices.map(device_address).unwrap_or_default())
                 .vertex_data(vertices.map(device_address).unwrap_or_default())

@@ -19,9 +19,16 @@ struct GridCell {
     uint level;
 };
 
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer HashGridKeys {
+    uint64_t data[];
+};
+
 struct HashGrid {
+    HashGridKeys keys;
     float scene_scale;
-    uint capacity, bucket_size, padding;
+    uint capacity;
+    uint bucket_size;
+    uint padding;
 };
 
 GridCell hash_grid_cell(vec3 position, vec3 camera_position, vec3 offset, float level_offset, in HashGrid hash_grid) {
@@ -45,17 +52,11 @@ uint hash_grid_hash(uint64_t key) {
     return jenkins_hash(uint(key & 0xffffffff)) ^ jenkins_hash(uint(key >> 32));
 }
 
-#endif
-
-#ifdef HASH_GRID_BUFFER
-#ifdef HASH_GRID_INSERT
-#ifdef HASH_GRID_FIND
-
-bool HASH_GRID_INSERT(in HashGrid hash_grid, uint64_t key, out uint index) {
+bool hash_grid_insert(in HashGrid hash_grid, uint64_t key, out uint index) {
     uint base_slot = min(hash_grid_hash(key) % hash_grid.capacity, hash_grid.capacity - hash_grid.bucket_size);
     uint64_t prev_key = HASH_GRID_INVALID_KEY;
     for (uint offset = 0; offset < hash_grid.bucket_size; offset++) {
-        prev_key = atomicCompSwap(HASH_GRID_BUFFER[base_slot + offset], HASH_GRID_INVALID_KEY, key);
+        prev_key = atomicCompSwap(hash_grid.keys.data[base_slot + offset], HASH_GRID_INVALID_KEY, key);
         if (prev_key == HASH_GRID_INVALID_KEY || prev_key == key) {
             index = base_slot + offset;
             return true;
@@ -64,10 +65,10 @@ bool HASH_GRID_INSERT(in HashGrid hash_grid, uint64_t key, out uint index) {
     return false;
 }
 
-bool HASH_GRID_FIND(in HashGrid hash_grid, uint64_t key, out uint index) {
+bool hash_grid_find(in HashGrid hash_grid, uint64_t key, out uint index) {
     uint base_slot = min(hash_grid_hash(key) % hash_grid.capacity, hash_grid.capacity - hash_grid.bucket_size);
     for (uint offset = 0; offset < hash_grid.bucket_size; offset++) {
-        uint64_t stored_key = HASH_GRID_BUFFER[base_slot + offset];
+        uint64_t stored_key = hash_grid.keys.data[base_slot + offset];
         if (stored_key == key) {
             index = base_slot + offset;
             return true;
@@ -76,6 +77,4 @@ bool HASH_GRID_FIND(in HashGrid hash_grid, uint64_t key, out uint index) {
     return false;
 }
 
-#endif
-#endif
 #endif

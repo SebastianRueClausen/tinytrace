@@ -412,7 +412,7 @@ impl RendererController {
                         ui.label(label);
                         let drag_value = egui::DragValue::new(value)
                             .range(range)
-                            .clamp_to_range(true)
+                            .clamp_existing_to_range(true)
                             .update_while_editing(false);
                         ui.add(drag_value);
                         ui.end_row();
@@ -440,7 +440,7 @@ impl RendererController {
                     ui.label("Scene scale");
                     let drag_value = egui::DragValue::new(&mut self.config.restir.scene_scale)
                         .range(0.1..=100.0)
-                        .clamp_to_range(true)
+                        .clamp_existing_to_range(true)
                         .update_while_editing(false);
                     ui.add(drag_value);
                     ui.end_row();

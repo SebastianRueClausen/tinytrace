@@ -57,6 +57,15 @@ impl RestirConstants {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::NoUninit)]
+struct RestirData {
+    reservoirs: u64,
+    reservoir_updates: u64,
+    update_counts: u64,
+    samples_counts: u64,
+}
+
 pub struct RestirState {
     pub reservoir_hash_grid: HashGrid,
     pub update_hash_grid: HashGrid,

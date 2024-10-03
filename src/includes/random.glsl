@@ -41,6 +41,10 @@ uint random_uint(inout Generator generator, uint end) {
     return xor_shift(generator.state) % end;
 }
 
+vec2 random_vec2(inout Generator generator) {
+    return vec2(random_float(generator), random_float(generator));
+}
+
 vec3 random_vec3(inout Generator generator) {
     return vec3(random_float(generator), random_float(generator), random_float(generator));
 }

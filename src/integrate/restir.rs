@@ -39,31 +39,15 @@ pub(super) struct Reservoir {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::NoUninit)]
-struct RestirConstants {
-    scene_scale: f32,
-    updates_per_cell: u32,
-    reservoirs_per_cell: u32,
-    replay: RestirReplay,
-}
-
-impl RestirConstants {
-    fn new(config: &RestirConfig) -> Self {
-        Self {
-            scene_scale: config.scene_scale,
-            updates_per_cell: config.updates_per_cell,
-            reservoirs_per_cell: config.reservoirs_per_cell,
-            replay: config.replay,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::NoUninit)]
 struct RestirData {
     reservoirs: u64,
     reservoir_updates: u64,
     update_counts: u64,
     samples_counts: u64,
+    scene_scale: f32,
+    updates_per_cell: u32,
+    reservoirs_per_cell: u32,
+    replay: RestirReplay,
 }
 
 pub struct RestirState {
@@ -72,8 +56,8 @@ pub struct RestirState {
     pub reservoirs: Handle<Buffer>,
     pub updates: Handle<Buffer>,
     pub update_counts: Handle<Buffer>,
-    pub reservoir_sample_counts: Handle<Buffer>,
-    pub constants: Handle<Buffer>,
+    pub sample_counts: Handle<Buffer>,
+    pub data: Handle<Buffer>,
     pub update_reservoirs: Handle<Shader>,
 }
 
@@ -81,13 +65,14 @@ fn create_buffer(
     context: &mut Context,
     count: u32,
     value_size: usize,
+    ty: BufferType,
 ) -> Result<Handle<Buffer>, tinytrace_backend::Error> {
     context.create_buffer(
         Lifetime::Renderer,
         &BufferRequest {
             size: count as u64 * value_size as u64,
-            ty: BufferType::Storage,
             memory_location: MemoryLocation::Device,
+            ty,
         },
     )
 }
@@ -96,12 +81,9 @@ impl RestirState {
     pub fn new(context: &mut Context, config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
-            binding!(uniform_buffer, RestirConstants, restir_constants),
+            binding!(uniform_buffer, RestirData, restir_data),
             binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
             binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
-            binding!(storage_buffer, uint, reservoir_update_counts, true, true),
-            binding!(storage_buffer, Reservoir, reservoirs, true, true),
-            binding!(storage_buffer, Reservoir, reservoir_updates, true, true),
         ];
         let update_reservoirs = context.create_shader(
             Lifetime::Renderer,
@@ -130,23 +112,32 @@ impl RestirState {
                 context,
                 config.reservoir_hash_grid_capacity * config.reservoirs_per_cell,
                 mem::size_of::<Reservoir>(),
+                BufferType::Storage,
             )?,
             updates: create_buffer(
                 context,
                 config.update_hash_grid_capacity * config.updates_per_cell,
                 mem::size_of::<Reservoir>(),
+                BufferType::Storage,
             )?,
             update_counts: create_buffer(
                 context,
                 config.update_hash_grid_capacity,
                 mem::size_of::<u32>(),
+                BufferType::Storage,
             )?,
-            reservoir_sample_counts: create_buffer(
+            sample_counts: create_buffer(
                 context,
                 config.reservoir_hash_grid_capacity,
                 mem::size_of::<u32>(),
+                BufferType::Storage,
             )?,
-            constants: create_buffer(context, 1, mem::size_of::<RestirConstants>())?,
+            data: create_buffer(
+                context,
+                1,
+                mem::size_of::<RestirData>(),
+                BufferType::Uniform,
+            )?,
         })
     }
 
@@ -158,7 +149,10 @@ impl RestirState {
         context
             .bind_shader(&self.update_reservoirs)
             .bind_buffer("constants", constants)
-            .bind_buffer("restir_constants", &self.constants)
+            .bind_buffer("restir_data", &self.data)
+            .register_indirect_buffer("reservoirs", &self.reservoirs, false)
+            .register_indirect_buffer("updates", &self.updates, false)
+            .register_indirect_buffer("update_counts", &self.update_counts, false)
             .bind_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.data)
             .register_indirect_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.keys, false)
             .bind_buffer("reservoir_update_hash_grid", &self.update_hash_grid.data)
@@ -167,19 +161,33 @@ impl RestirState {
                 &self.update_hash_grid.keys,
                 false,
             )
-            .bind_buffer("reservoir_update_counts", &self.update_counts)
-            .bind_buffer("reservoirs", &self.reservoirs)
-            .bind_buffer("reservoir_updates", &self.updates)
             .dispatch(self.update_hash_grid.capacity, 1)?;
         Ok(())
     }
 
     pub fn prepare(&self, context: &mut Context, config: &RestirConfig) -> Result<(), Error> {
+        let RestirConfig {
+            scene_scale,
+            updates_per_cell,
+            reservoirs_per_cell,
+            replay,
+            ..
+        } = *config;
+        let data = RestirData {
+            reservoirs: context.buffer_device_address(&self.reservoirs),
+            reservoir_updates: context.buffer_device_address(&self.updates),
+            update_counts: context.buffer_device_address(&self.update_counts),
+            samples_counts: context.buffer_device_address(&self.sample_counts),
+            scene_scale,
+            updates_per_cell,
+            reservoirs_per_cell,
+            replay,
+        };
         context
             .fill_buffer(&self.update_counts, 0)?
             .write_buffers(&[BufferWrite {
-                buffer: self.constants.clone(),
-                data: bytemuck::bytes_of(&RestirConstants::new(config)).into(),
+                buffer: self.data.clone(),
+                data: bytemuck::bytes_of(&data).into(),
             }])?;
         self.update_hash_grid.clear(context)?;
         Ok(())

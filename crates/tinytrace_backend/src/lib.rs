@@ -50,8 +50,8 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use resource::Allocator;
 pub use resource::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, Extent, Filter,
-    Image, ImageFormat, ImageRequest, MemoryLocation, Offset, Sampler, SamplerRequest, Tlas,
-    TlasBuildMode, TlasInstance, VertexFormat,
+    Image, ImageFormat, ImageRequest, MemoryLocation, Offset, Sampler, SamplerRequest,
+    TemporaryBufferRequest, Tlas, TlasBuildMode, TlasInstance, VertexFormat,
 };
 use shader::BoundShader;
 pub use shader::{Binding, BindingType, Shader, ShaderRequest};

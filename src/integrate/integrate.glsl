@@ -201,9 +201,9 @@ vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties sur
 }
 
 Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
-    uint base_index = restir_constants.reservoirs_per_cell * cell_index;
-    uint reservoir_index = random_uint(generator, restir_constants.reservoirs_per_cell);
-    return reservoirs[base_index + reservoir_index];
+    uint base_index = restir_data.reservoirs_per_cell * cell_index;
+    uint reservoir_index = random_uint(generator, restir_data.reservoirs_per_cell);
+    return restir_data.reservoirs.data[base_index + reservoir_index];
 }
 
 uint64_t get_reservoir_key(vec3 position, vec3 normal) {
@@ -217,7 +217,7 @@ uint take_reservoir_sample_count(vec3 position, vec3 normal) {
     uint64_t key = get_reservoir_key(position, normal);
     uint cell_index;
     if (hash_grid_insert(reservoir_hash_grid, key, cell_index)) {
-        return atomicExchange(reservoir_sample_counts[cell_index], 0);
+        return atomicExchange(restir_data.sample_counts.data[cell_index], 0);
     } else {
         return 0;
     }
@@ -227,7 +227,7 @@ void increment_reservoir_sample_count(vec3 position, vec3 normal) {
     uint64_t key = get_reservoir_key(position, normal);
     uint cell_index;
     if (hash_grid_insert(reservoir_hash_grid, key, cell_index)) {
-        atomicAdd(reservoir_sample_counts[cell_index], 1);
+        atomicAdd(restir_data.sample_counts.data[cell_index], 1);
     }
 }
 
@@ -306,7 +306,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
         return false;
     }
 
-    if (restir_constants.replay == REPLAY_FIRST && path_state.replay_path.is_found) {
+    if (restir_data.replay == REPLAY_FIRST && path_state.replay_path.is_found) {
         if (length(path_vertex_position(path_state.replay_path.reconnect_location) - hit.world_position) < 0.01) {
             path_state.accumulated += path_state.attenuation * path_state.replay_path.radiance;
             return false;
@@ -371,7 +371,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
             // Reconnect with the sample in the reservoir if it's valid.
             uint bounce_budget = bounce - constants.bounce_count - 1;
             bool can_reconnect = reservoir_is_valid(reservoir)
-                && can_reconnect_to_path(hit.world_position, surface_basis.normal, bounce_budget, restir_constants.replay, reservoir.path);
+                && can_reconnect_to_path(hit.world_position, surface_basis.normal, bounce_budget, restir_data.replay, reservoir.path);
             if (can_reconnect) {
                 path_state.path_generator = reservoir.path.generator;
                 local_scatter = transform_from_basis(surface_basis, normalize(
@@ -441,7 +441,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
     // not algebraic).
     vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / scatter_density, vec3(1.0));
 
-    if (restir_constants.replay == REPLAY_NONE && path_state.replay_path.is_found) {
+    if (restir_data.replay == REPLAY_NONE && path_state.replay_path.is_found) {
         path_state.accumulated += attenuation_factor * path_state.attenuation * path_state.replay_path.radiance;
         return false;
     }
@@ -501,10 +501,10 @@ void main() {
                     position, constants.camera_position.xyz, vec3(0.0), 0.0, reservoir_update_hash_grid
                 ));
                 uint slot = hash_grid_hash(key) % reservoir_update_hash_grid.capacity;
-                uint update_index = atomicAdd(reservoir_update_counts[slot], 1);
-                if (update_index < restir_constants.updates_per_cell) {
-                    uint base_index = restir_constants.updates_per_cell * slot;
-                    reservoir_updates[base_index + update_index] = reservoir;
+                uint update_index = atomicAdd(restir_data.update_counts.data[slot], 1);
+                if (update_index < restir_data.updates_per_cell) {
+                    uint base_index = restir_data.updates_per_cell * slot;
+                    restir_data.updates.data[base_index + update_index] = reservoir;
                 }
             } else {
                 increment_reservoir_sample_count(position, normal);

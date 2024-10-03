@@ -1,5 +1,6 @@
 use ash::vk;
 use glam::Mat4;
+use std::borrow::Cow;
 use std::{array, collections::HashMap, mem, slice};
 
 use super::device::Device;
@@ -114,6 +115,12 @@ pub struct BufferRequest {
     pub memory_location: MemoryLocation,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct TemporaryBufferRequest<'a> {
+    pub ty: BufferType,
+    pub data: &'a [u8],
+}
+
 #[derive(Debug)]
 pub struct Buffer {
     pub(crate) buffer: vk::Buffer,
@@ -133,6 +140,25 @@ impl Context {
         let pool = self.pools.entry(lifetime).or_default();
         let buffer = Buffer::new(&self.device, &mut pool.allocator, request)?;
         Ok(Handle::new(lifetime, pool.epoch, &mut pool.buffers, buffer))
+    }
+
+    pub fn create_temporary_buffer(
+        &mut self,
+        request: &TemporaryBufferRequest,
+    ) -> Result<Handle<Buffer>, Error> {
+        let buffer = self.create_buffer(
+            Lifetime::Frame,
+            &BufferRequest {
+                memory_location: MemoryLocation::Device,
+                size: request.data.len() as u64,
+                ty: request.ty,
+            },
+        )?;
+        self.write_buffers(&[BufferWrite {
+            buffer: buffer.clone(),
+            data: Cow::from(request.data),
+        }])?;
+        Ok(buffer)
     }
 
     pub fn buffer_device_address(&self, buffer: &Handle<Buffer>) -> u64 {

@@ -16,14 +16,10 @@ impl Integrator {
     pub fn new(context: &mut Context, restir_config: &RestirConfig) -> Result<Self, Error> {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
-            binding!(uniform_buffer, RestirConstants, restir_constants),
             binding!(uniform_buffer, Scene, scene),
             binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
             binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
-            binding!(storage_buffer, Reservoir, reservoirs, true, true),
-            binding!(storage_buffer, Reservoir, reservoir_updates, true, true),
-            binding!(storage_buffer, uint, reservoir_update_counts, true, true),
-            binding!(storage_buffer, uint, reservoir_sample_counts, true, true),
+            binding!(uniform_buffer, RestirData, restir_data),
             binding!(acceleration_structure, acceleration_structure),
             binding!(
                 storage_image,
@@ -60,7 +56,6 @@ impl Integrator {
         context
             .bind_shader(&self.integrate)
             .bind_buffer("constants", constants)
-            .bind_buffer("restir_constants", &self.restir_state.constants)
             .bind_buffer("scene", &scene.scene_data)
             .register_indirect_buffer("vertices", &scene.vertices, false)
             .register_indirect_buffer("indices", &scene.indices, false)
@@ -85,13 +80,19 @@ impl Integrator {
                 &self.restir_state.update_hash_grid.keys,
                 true,
             )
-            .bind_buffer("reservoirs", &self.restir_state.reservoirs)
-            .bind_buffer("reservoir_updates", &self.restir_state.updates)
-            .bind_buffer("reservoir_update_counts", &self.restir_state.update_counts)
-            .bind_buffer(
-                "reservoir_sample_counts",
-                &self.restir_state.reservoir_sample_counts,
+            .bind_buffer("restir_data", &self.restir_state.data)
+            .register_indirect_buffer("reservoir_updates", &self.restir_state.updates, true)
+            .register_indirect_buffer(
+                "reservoir_update_counts",
+                &self.restir_state.update_counts,
+                true,
             )
+            .register_indirect_buffer(
+                "reservoir_sample_counts",
+                &self.restir_state.sample_counts,
+                true,
+            )
+            .register_indirect_buffer("reservoirs", &self.restir_state.reservoirs, false)
             .bind_sampled_images("textures", &scene.texture_sampler, &scene.textures)
             .bind_acceleration_structure("acceleration_structure", &scene.tlas)
             .bind_storage_image("target", target);

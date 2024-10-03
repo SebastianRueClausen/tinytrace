@@ -207,4 +207,23 @@ ReplayPath create_replay_path() {
     return replay_path;
 }
 
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Reservoirs {
+    Reservoir data[];
+};
+
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Counters {
+    uint data[];
+};
+
+struct RestirData {
+    Reservoirs reservoirs;
+    Reservoirs updates;
+    Counters update_counts;
+    Counters sample_counts;
+    float scene_scale;
+    uint updates_per_cell;
+    uint reservoirs_per_cell;
+    RestirReplay replay;
+};
+
 #endif

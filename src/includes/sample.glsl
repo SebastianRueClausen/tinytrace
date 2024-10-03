@@ -18,7 +18,7 @@ vec3 uniform_hemisphere_sample(inout Generator generator) {
 }
 
 vec2 sample_disk(inout Generator generator) {
-    vec2 u = 2.0 * vec2(random_float(generator), random_float(generator)) - 1.0;
+    vec2 u = 2.0 * random_vec2(generator) - 1.0;
     if (u.x == 0.0 && u.y == 0.0) return vec2(0.0);
     float phi, r;
     if (abs(u.x) > abs(u.y)) {

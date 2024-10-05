@@ -3,6 +3,7 @@
 
 #include "random"
 #include "octahedron"
+#include "hash_grid"
 #include "math"
 #include "brdf"
 
@@ -224,6 +225,7 @@ struct RestirData {
     uint updates_per_cell;
     uint reservoirs_per_cell;
     RestirReplay replay;
+    HashGrid reservoir_hash_grid, update_hash_grid;
 };
 
 #endif

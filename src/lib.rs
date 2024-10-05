@@ -175,10 +175,14 @@ impl Renderer {
 
     pub fn timings(&mut self) -> Option<Timings> {
         Some(Timings {
-            integrate: self.context.timestamp("after integrate")?
-                - self.context.timestamp("before integrate")?,
-            post_process: self.context.timestamp("after post process")?
-                - self.context.timestamp("before post process")?,
+            integrate: self
+                .context
+                .timestamp("after integrate")?
+                .saturating_sub(self.context.timestamp("before integrate")?),
+            post_process: self
+                .context
+                .timestamp("after post process")?
+                .saturating_sub(self.context.timestamp("before post process")?),
         })
     }
 

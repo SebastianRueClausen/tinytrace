@@ -17,8 +17,6 @@ impl Integrator {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(uniform_buffer, Scene, scene),
-            binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
-            binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
             binding!(uniform_buffer, RestirData, restir_data),
             binding!(acceleration_structure, acceleration_structure),
             binding!(
@@ -62,25 +60,17 @@ impl Integrator {
             .register_indirect_buffer("materials", &scene.materials, false)
             .register_indirect_buffer("instances", &scene.instances, false)
             .register_indirect_buffer("emissive_triangles", &scene.emissive_triangles, false)
-            .bind_buffer(
-                "reservoir_hash_grid",
-                &self.restir_state.reservoir_hash_grid.data,
-            )
+            .bind_buffer("restir_data", &self.restir_state.data)
             .register_indirect_buffer(
                 "reservoir_hash_grid",
                 &self.restir_state.reservoir_hash_grid.keys,
                 false,
-            )
-            .bind_buffer(
-                "reservoir_update_hash_grid",
-                &self.restir_state.update_hash_grid.data,
             )
             .register_indirect_buffer(
                 "reservoir_update_hash_grid",
                 &self.restir_state.update_hash_grid.keys,
                 true,
             )
-            .bind_buffer("restir_data", &self.restir_state.data)
             .register_indirect_buffer("reservoir_updates", &self.restir_state.updates, true)
             .register_indirect_buffer(
                 "reservoir_update_counts",

@@ -3,7 +3,7 @@ use std::mem;
 use glam::Vec3;
 use half::f16;
 
-use crate::hash_grid::HashGrid;
+use crate::hash_grid::{HashGrid, HashGridDescriptor};
 use crate::{Error, RestirConfig, RestirReplay};
 use tinytrace_backend::{
     binding, Binding, BindingType, Buffer, BufferRequest, BufferType, BufferWrite, Context, Extent,
@@ -12,7 +12,7 @@ use tinytrace_backend::{
 
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug)]
-pub(super) struct BounceSurface {
+pub(super) struct PathVertex {
     position: Vec3,
     normal: [f16; 2],
 }
@@ -20,8 +20,8 @@ pub(super) struct BounceSurface {
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug)]
 pub(super) struct Path {
-    origin: BounceSurface,
-    destination: BounceSurface,
+    origin: PathVertex,
+    destination: PathVertex,
     radiance: [f16; 3],
     bounce_count: u16,
     generator: u32,
@@ -48,6 +48,8 @@ struct RestirData {
     updates_per_cell: u32,
     reservoirs_per_cell: u32,
     replay: RestirReplay,
+    reservoir_hash_grid: HashGridDescriptor,
+    update_hash_grid: HashGridDescriptor,
 }
 
 pub struct RestirState {
@@ -82,8 +84,6 @@ impl RestirState {
         let bindings = &[
             binding!(uniform_buffer, Constants, constants),
             binding!(uniform_buffer, RestirData, restir_data),
-            binding!(uniform_buffer, HashGrid, reservoir_hash_grid),
-            binding!(uniform_buffer, HashGrid, reservoir_update_hash_grid),
         ];
         let update_reservoirs = context.create_shader(
             Lifetime::Renderer,
@@ -153,9 +153,7 @@ impl RestirState {
             .register_indirect_buffer("reservoirs", &self.reservoirs, false)
             .register_indirect_buffer("updates", &self.updates, false)
             .register_indirect_buffer("update_counts", &self.update_counts, false)
-            .bind_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.data)
             .register_indirect_buffer("reservoir_hash_grid", &self.reservoir_hash_grid.keys, false)
-            .bind_buffer("reservoir_update_hash_grid", &self.update_hash_grid.data)
             .register_indirect_buffer(
                 "reservoir_update_hash_grid",
                 &self.update_hash_grid.keys,
@@ -178,6 +176,8 @@ impl RestirState {
             reservoir_updates: context.buffer_device_address(&self.updates),
             update_counts: context.buffer_device_address(&self.update_counts),
             samples_counts: context.buffer_device_address(&self.sample_counts),
+            reservoir_hash_grid: self.reservoir_hash_grid.descriptor(context),
+            update_hash_grid: self.update_hash_grid.descriptor(context),
             scene_scale,
             updates_per_cell,
             reservoirs_per_cell,

@@ -26,9 +26,7 @@ layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Has
 struct HashGrid {
     HashGridKeys keys;
     float scene_scale;
-    uint capacity;
-    uint bucket_size;
-    uint padding;
+    uint bucket_size, capacity, padding;
 };
 
 GridCell hash_grid_cell(vec3 position, vec3 camera_position, vec3 offset, float level_offset, in HashGrid hash_grid) {

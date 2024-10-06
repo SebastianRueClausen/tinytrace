@@ -6,7 +6,6 @@ mod test;
 mod camera;
 mod config;
 mod error;
-mod hash_grid;
 mod integrate;
 mod post_process;
 mod scene;
@@ -14,7 +13,7 @@ mod scene;
 use std::{mem, time::Duration};
 
 pub use camera::{Camera, CameraMove};
-pub use config::{Config, LightSampling, RestirConfig, RestirReplay, SampleStrategy};
+pub use config::{Config, LightSampling, SampleStrategy};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
 use integrate::Integrator;
@@ -57,8 +56,6 @@ impl Renderer {
         context.add_include("random", include_str!("includes/random.glsl").into());
         context.add_include("sample", include_str!("includes/sample.glsl").into());
         context.add_include("debug", include_str!("includes/debug.glsl").into());
-        context.add_include("hash_grid", include_str!("includes/hash_grid.glsl").into());
-        context.add_include("restir", include_str!("includes/restir.glsl").into());
         context.add_include(
             "light_sampling",
             include_str!("includes/light_sampling.glsl").into(),
@@ -74,7 +71,7 @@ impl Renderer {
             },
         )?;
         let config = Config::default();
-        let integrator = Integrator::new(&mut context, &config.restir)?;
+        let integrator = Integrator::new(&mut context)?;
         let post_process = if window.is_some() {
             Some(PostProcess::new(&mut context)?)
         } else {
@@ -108,11 +105,6 @@ impl Renderer {
     pub fn set_config(&mut self, config: Config) -> Result<(), Error> {
         if self.config != config {
             self.reset_accumulation();
-            if self.config.restir != config.restir {
-                self.context
-                    .clear_resources_with_lifetime(Lifetime::Renderer)?;
-                self.integrator = Integrator::new(&mut self.context, &config.restir)?;
-            }
         }
         self.config = config;
         Ok(())
@@ -137,7 +129,6 @@ impl Renderer {
             accumulated_frame_count: self.accumulated_frame_count,
             sample_count: self.config.sample_count,
             bounce_count: self.config.bounce_count,
-            use_world_space_restir: self.config.restir.enabled.into(),
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             tonemap: self.config.tonemap.into(),
@@ -157,7 +148,6 @@ impl Renderer {
         self.context.insert_timestamp("before integrate");
         self.integrator.integrate(
             &mut self.context,
-            &self.config,
             &self.constants,
             &self.scene,
             &self.render_target,
@@ -254,11 +244,10 @@ struct Constants {
     sample_count: u32,
     bounce_count: u32,
     screen_size: UVec2,
-    use_world_space_restir: u32,
     tonemap: u32,
     sample_strategy: SampleStrategy,
     light_sampling: LightSampling,
-    padding: [u32; 2],
+    padding: [u32; 3],
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

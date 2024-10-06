@@ -35,17 +35,12 @@ fn benchmark() {
         sample_strategy: tinytrace::SampleStrategy::CosineHemisphere,
         light_sampling: tinytrace::LightSampling::OnHit,
         sample_count: 1 << 16,
-        restir: tinytrace::RestirConfig {
-            enabled: false,
-            ..Default::default()
-        },
         bounce_count,
         tonemap: false,
     };
     let test_config = tinytrace::Config {
         sample_strategy: tinytrace::SampleStrategy::Brdf,
         light_sampling: tinytrace::LightSampling::NextEventEstimation,
-        restir: tinytrace::RestirConfig::default(),
         sample_count: 32,
         bounce_count,
         tonemap: false,

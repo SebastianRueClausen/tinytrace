@@ -11,7 +11,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 pub use tinytrace::Error;
 use tinytrace::LightSampling;
 use tinytrace::{Camera, CameraMove};
-use tinytrace::{Renderer, RestirReplay, SampleStrategy, Timings};
+use tinytrace::{Renderer, SampleStrategy, Timings};
 use tinytrace_backend::{Context, Extent, Handle, Image};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
@@ -405,62 +405,6 @@ impl RendererController {
             };
             checkbox(&mut self.accumulate, "Accumulate");
             checkbox(&mut self.config.tonemap, "Enable tonemapping");
-            checkbox(&mut self.config.restir.enabled, "Enable world space ReSTIR");
-            ui.add_enabled_ui(self.config.restir.enabled, |ui| {
-                egui::Grid::new("restir").show(ui, |ui| {
-                    let mut drag_value = |value: &mut u32, label: &str, range| {
-                        ui.label(label);
-                        let drag_value = egui::DragValue::new(value)
-                            .range(range)
-                            .clamp_existing_to_range(true)
-                            .update_while_editing(false);
-                        ui.add(drag_value);
-                        ui.end_row();
-                    };
-                    drag_value(
-                        &mut self.config.restir.reservoir_hash_grid_capacity,
-                        "Reservoir hash grid capacity",
-                        0xfff..=0xffffff,
-                    );
-                    drag_value(
-                        &mut self.config.restir.update_hash_grid_capacity,
-                        "Update hash grid capacity",
-                        0xfff..=0xffffff,
-                    );
-                    drag_value(
-                        &mut self.config.restir.reservoirs_per_cell,
-                        "Reservoirs per cell",
-                        1..=256,
-                    );
-                    drag_value(
-                        &mut self.config.restir.updates_per_cell,
-                        "Reservoir updates per cell",
-                        1..=256,
-                    );
-                    ui.label("Scene scale");
-                    let drag_value = egui::DragValue::new(&mut self.config.restir.scene_scale)
-                        .range(0.1..=100.0)
-                        .clamp_existing_to_range(true)
-                        .update_while_editing(false);
-                    ui.add(drag_value);
-                    ui.end_row();
-                    egui::ComboBox::from_label("Replay")
-                        .selected_text(format!("{}", self.config.restir.replay))
-                        .show_ui(ui, |ui| {
-                            let mut option = |value| {
-                                ui.selectable_value(
-                                    &mut self.config.restir.replay,
-                                    value,
-                                    format!("{value}"),
-                                );
-                            };
-                            option(RestirReplay::None);
-                            option(RestirReplay::First);
-                            option(RestirReplay::Full);
-                        });
-                    ui.end_row();
-                });
-            });
         });
     }
 }

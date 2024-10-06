@@ -1,11 +1,9 @@
-#include "restir"
 #include "scene"
 #include "brdf"
 #include "math"
 #include "sample"
 #include "debug"
 #include "constants"
-#include "hash_grid"
 
 #include "<bindings>"
 
@@ -108,10 +106,6 @@ float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
     ));
 }
 
-vec3 normal_bias(vec3 position, vec3 normal) {
-    return position + normal * 0.00001;
-}
-
 vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties surface, inout Generator generator) {
     DirectLightSample light_sample = sample_random_light(scene, generator);
     vec3 to_light = light_sample.position - position;
@@ -155,17 +149,12 @@ Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
     return surface_basis;
 }
 
-struct TracePathConfig {
-    uint bounce_count;
-    bool find_resample_path, resample_path;
-};
-
 struct PathState {
     vec3 accumulated, attenuation;
     // The two generators. `generator` is used to everything that doens't change the path.
     // `path_generator` generates the path. This is usefull when replaying paths, which only
     // requires replacing `path_generator`.
-    Generator generator, path_generator;
+    Generator generator;
     // The normalized device coordinates. This is only used to calculate the mip level for the
     // primary hit.
     vec2 ndc;
@@ -173,11 +162,10 @@ struct PathState {
     float mip_level;
     // The next ray to be traced.
     Ray ray;
-    ReplayPath replay_path;
 };
 
-PathState create_path_state(Generator generator, Generator path_generator, vec2 ndc, Ray ray) {
-    return PathState(vec3(0.0), vec3(1.0), generator, path_generator, ndc, 1.0, ray, create_replay_path());
+PathState create_path_state(Generator generator, vec2 ndc, Ray ray) {
+    return PathState(vec3(0.0), vec3(1.0), generator, ndc, 1.0, ray);
 }
 
 LobeType sample_scatter_direction(
@@ -211,25 +199,12 @@ LobeType sample_scatter_direction(
 }
 
 // Trace the next path segment. Returns true false if the path has left the scene.
-bool next_path_segment(inout PathState path_state, inout PathCandidate path_candidate, TracePathConfig config, uint bounce) {
+bool next_path_segment(inout PathState path_state, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
         vec3 sky_color = vec3(0.0);
         path_state.accumulated += sky_color * path_state.attenuation;
-        if (path_candidate.is_found) {
-            add_light_to_path_candidate(path_candidate, sky_color, bounce);
-        }
         return false;
-    }
-
-    if (restir_data.replay == REPLAY_FIRST && path_state.replay_path.is_found) {
-        if (length(path_vertex_position(path_state.replay_path.reconnect_location) - hit.world_position) < 0.01) {
-            path_state.accumulated += path_state.attenuation * path_state.replay_path.radiance;
-            return false;
-        } else {
-            path_state.replay_path.is_found = false;
-            // Continuing here may not be correct.
-        }
     }
 
     Material material = scene.materials.materials[hit.material];
@@ -265,88 +240,29 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
     // litterature.
     vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
 
-    float scatter_density = 0.0;
-    vec3 local_scatter, local_half_vector;
-
-    bool can_reconnect = config.resample_path
-        // Check that we haven't already reconnected.
-        && !path_state.replay_path.is_found
-        // Check that we aren't "recording" a resample path.
-        && !path_candidate.is_found;
-    if (can_reconnect) {
-        uint64_t key = hash_grid_key(hash_grid_cell(
-            normal_bias(hit.world_position, surface_basis.normal),
-            constants.camera_position.xyz,
-            reservoir_hash_grid_position_jitter(path_state.generator),
-            reservoir_hash_grid_level_jitter(path_state.generator),
-            restir_data.reservoir_hash_grid
-        ));
-        uint reservoir_cell_index;
-        if (hash_grid_find(restir_data.reservoir_hash_grid, key, reservoir_cell_index)) {
-            Reservoir reservoir = get_reservoir_from_cell(restir_data, reservoir_cell_index, path_state.generator);
-            // Reconnect with the sample in the reservoir if it's valid.
-            uint bounce_budget = bounce - constants.bounce_count - 1;
-            bool can_reconnect = reservoir_is_valid(reservoir)
-                && can_reconnect_to_path(hit.world_position, surface_basis.normal, bounce_budget, restir_data.replay, reservoir.path);
-            if (can_reconnect) {
-                path_state.path_generator = reservoir.path.generator;
-                local_scatter = transform_from_basis(surface_basis, normalize(
-                    path_vertex_position(reservoir.path.destination) - hit.world_position
-                ));
-                local_half_vector = normalize(local_scatter + local_view);
-                float jacobian = path_jacobian(hit.world_position, reservoir.path);
-                scatter_density = 1.0 / reservoir.weight * clamp(jacobian, 0.00001, 1000.0);
-                path_state.replay_path.radiance = vec3(reservoir.path.radiance[0], reservoir.path.radiance[1], reservoir.path.radiance[2]);
-                path_state.replay_path.reconnect_location = reservoir.path.destination;
-                path_state.replay_path.is_found = true;
-            }
-        }
-    }
-
-    Generator before_sample_generator = path_state.path_generator;
-
     bool perform_next_event_estimation = constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION
         && surface.roughness > 0.15;
 
     // Next event estimation.
     if (perform_next_event_estimation) {
         vec3 direct_light =
-            direct_light_contribution(hit.world_position, surface_basis.normal, surface, path_state.path_generator);
+            direct_light_contribution(hit.world_position, surface_basis.normal, surface, path_state.generator);
         path_state.accumulated += path_state.attenuation * direct_light;
-        if (path_candidate.is_found) {
-            add_light_to_path_candidate(path_candidate, direct_light, bounce);
-        }
     }
 
     // TODO: Figure out how to handle hitting light sources directly.
     if (bounce == 0 || !perform_next_event_estimation) {
         path_state.accumulated += emissive * path_state.attenuation;
-        if (path_candidate.is_found) {
-            add_light_to_path_candidate(path_candidate, emissive, bounce);
-        }
     }
 
-    LobeType lobe_type = 0;
-    if (scatter_density == 0.0) {
-        lobe_type = sample_scatter_direction(surface, path_state.path_generator, local_view, local_scatter, local_half_vector, scatter_density);
-    }
-
-    float section_distance_squared = length_squared(hit.world_position - path_state.ray.origin);
-    bool has_candidate_path = config.find_resample_path
-        && !path_state.replay_path.is_found
-        && can_form_path_candidate(path_candidate, bounce, lobe_type, section_distance_squared);
-    if (has_candidate_path) {
-        path_candidate.origin = create_path_vertex(path_state.ray.origin, path_candidate.previous_normal);
-        path_candidate.destination = create_path_vertex(hit.world_position, surface_basis.normal);
-        path_candidate.generator = before_sample_generator;
-        path_candidate.scatter_density = scatter_density;
-        path_candidate.first_bounce = uint16_t(bounce);
-        path_candidate.last_bounce = path_candidate.first_bounce;
-        path_candidate.is_found = true;
-    }
+    float scatter_density = 0.0;
+    vec3 local_scatter, local_half_vector;
+    LobeType lobe_type = sample_scatter_direction(
+        surface, path_state.generator, local_view, local_scatter, local_half_vector, scatter_density
+    );
 
     path_state.ray.direction = transform_to_basis(surface_basis, local_scatter);
-    path_state.ray.origin = normal_bias(hit.world_position, surface_basis.normal);
+    path_state.ray.origin = hit.world_position + surface_basis.normal * 0.001;
 
     ScatterProperties scatter =
         create_scatter_properties(surface, path_state.ray.direction, surface_basis.normal);
@@ -357,16 +273,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
     // not algebraic).
     vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / scatter_density, vec3(1.0));
 
-    if (restir_data.replay == REPLAY_NONE && path_state.replay_path.is_found) {
-        path_state.accumulated += attenuation_factor * path_state.attenuation * path_state.replay_path.radiance;
-        return false;
-    }
-
     path_state.attenuation *= attenuation_factor;
-    if (path_candidate.is_found) path_candidate.attenuation *= attenuation_factor;
-
-    path_candidate.previous_normal = surface_basis.normal;
-    path_candidate.previous_bounce_was_diffuse = surface.roughness > 0.25;
 
     // Heuristic for mip level.
     path_state.mip_level += surface.roughness;
@@ -377,44 +284,23 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
 void main() {
     uvec2 pixel_index = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel_index, constants.screen_size))) return;
-
     Generator generator =
         init_generator_from_pixel(pixel_index, constants.screen_size, constants.frame_index);
-
     vec3 accumulated = vec3(0.0);
     for (uint sample_index = 0; sample_index < constants.sample_count; sample_index++) {
-        TracePathConfig trace_path_config;
-        if (constants.use_world_space_restir != 0) {
-            bool resample_path = random_float(generator) > 0.75;
-            trace_path_config = TracePathConfig(constants.bounce_count, true, resample_path);
-        } else {
-            trace_path_config = TracePathConfig(constants.bounce_count, false, false);
-        }
-
-        Generator path_generator = init_generator_from_index(generator.state, sample_index);
-
         vec2 ndc = pixel_ndc(pixel_index, generator);
         Ray ray = Ray(camera_ray_direction(ndc), constants.camera_position.xyz);
-
-        PathState path_state = create_path_state(generator, path_generator, ndc, ray);
-        PathCandidate path_candidate = create_empty_path_candidate();
-
+        PathState path_state = create_path_state(generator, ndc, ray);
         for (uint bounce = 0; bounce < constants.bounce_count; bounce++) {
-            if (!next_path_segment(path_state, path_candidate, trace_path_config, bounce)) break;
+            if (!next_path_segment(path_state, bounce)) break;
         }
-
         accumulated += path_state.accumulated;
-
-        register_path_sample(restir_data, path_candidate, constants.camera_position.xyz);
     }
-
     accumulated /= constants.sample_count;
-
     if (constants.accumulated_frame_count != 0) {
         vec3 previous = imageLoad(target, ivec2(pixel_index)).xyz;
         accumulated = (previous * (constants.accumulated_frame_count - 1) + accumulated)
             / constants.accumulated_frame_count;
     }
-
     imageStore(target, ivec2(pixel_index), vec4(accumulated, 1.0));
 }

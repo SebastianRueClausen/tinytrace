@@ -228,4 +228,56 @@ struct RestirData {
     HashGrid reservoir_hash_grid, update_hash_grid;
 };
 
+uint64_t get_reservoir_key(in RestirData restir_data, vec3 camera_position, vec3 position, vec3 normal) {
+    return hash_grid_key(hash_grid_cell(
+        position, camera_position, vec3(0.0), 0.0, restir_data.reservoir_hash_grid
+    ));
+}
+
+Reservoir get_reservoir_from_cell(in RestirData restir_data, uint cell_index, inout Generator generator) {
+    uint base_index = restir_data.reservoirs_per_cell * cell_index;
+    uint reservoir_index = random_uint(generator, restir_data.reservoirs_per_cell);
+    return restir_data.reservoirs.data[base_index + reservoir_index];
+}
+
+uint take_reservoir_sample_count(in RestirData restir_data, vec3 camera_position, vec3 position, vec3 normal) {
+    uint64_t key = get_reservoir_key(restir_data, camera_position, position, normal);
+    uint cell_index;
+    if (hash_grid_insert(restir_data.reservoir_hash_grid, key, cell_index)) {
+        return atomicExchange(restir_data.sample_counts.data[cell_index], 0);
+    } else {
+        return 0;
+    }
+}
+
+void register_path_sample(
+    in RestirData restir_data, PathCandidate path_candidate, vec3 camera_position
+) {
+    if (!path_candidate.is_found) {
+        return;
+    }
+    vec3 position = path_vertex_position(path_candidate.origin);
+    vec3 normal = path_vertex_normal(path_candidate.origin);
+    if (length_squared(path_candidate.accumulated) > 0.0) {
+        uint16_t sample_count = uint16_t(take_reservoir_sample_count(restir_data, camera_position, position, normal) + 1);
+        Reservoir reservoir = create_reservoir_from_path_candidate(path_candidate, sample_count);
+        // Insert as a reservoir update.
+        uint64_t key = hash_grid_key(hash_grid_cell(
+            position, camera_position, vec3(0.0), 0.0, restir_data.update_hash_grid
+        ));
+        uint slot = hash_grid_hash(key) % restir_data.reservoir_hash_grid.capacity;
+        uint update_index = atomicAdd(restir_data.update_counts.data[slot], 1);
+        if (update_index < restir_data.updates_per_cell) {
+            uint base_index = restir_data.updates_per_cell * slot;
+            restir_data.updates.data[base_index + update_index] = reservoir;
+        }
+    } else {
+        uint64_t key = get_reservoir_key(restir_data, camera_position, position, normal);
+        uint cell_index;
+        if (hash_grid_insert(restir_data.reservoir_hash_grid, key, cell_index)) {
+            atomicAdd(restir_data.sample_counts.data[cell_index], 1);
+        }
+    }
+}
+
 #endif

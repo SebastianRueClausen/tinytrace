@@ -32,4 +32,32 @@ float pow2(float value) { return value * value; }
 float length_squared(vec2 value) { return dot(value, value); }
 float length_squared(vec3 value) { return dot(value, value); }
 
+vec2 interpolate(vec3 barycentric, f16vec2 a, f16vec2 b, f16vec2 c) {
+    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
+}
+
+vec3 interpolate(vec3 barycentric, vec3 a, vec3 b, vec3 c) {
+    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
+}
+
+struct Ray {
+    vec3 direction;
+    vec3 origin;
+};
+
+// Returns the barycentric coordinates of ray triangle intersection.
+vec3 triangle_intersection(vec3 triangle[3], Ray ray) {
+    vec3 edge_to_origin = ray.origin - triangle[0];
+    vec3 edge_2 = triangle[2] - triangle[0];
+    vec3 edge_1 = triangle[1] - triangle[0];
+    vec3 r = cross(ray.direction, edge_2);
+    vec3 s = cross(edge_to_origin, edge_1);
+    float inverse_det = 1.0 / dot(r, edge_1);
+    float v1 = dot(r, edge_to_origin);
+    float v2 = dot(s, ray.direction);
+    float b = v1 * inverse_det;
+    float c = v2 * inverse_det;
+    return vec3(1.0 - b - c, b, c);
+}
+
 #endif

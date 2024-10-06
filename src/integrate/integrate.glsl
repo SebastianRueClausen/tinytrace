@@ -16,37 +16,9 @@ struct RayHit {
     uint instance, material;
 };
 
-struct Ray {
-    vec3 direction;
-    vec3 origin;
-};
-
-// Returns the barycentric coordinates of ray triangle intersection.
-vec3 triangle_intersection(vec3 triangle[3], Ray ray) {
-    vec3 edge_to_origin = ray.origin - triangle[0];
-    vec3 edge_2 = triangle[2] - triangle[0];
-    vec3 edge_1 = triangle[1] - triangle[0];
-    vec3 r = cross(ray.direction, edge_2);
-    vec3 s = cross(edge_to_origin, edge_1);
-    float inverse_det = 1.0 / dot(r, edge_1);
-    float v1 = dot(r, edge_to_origin);
-    float v2 = dot(s, ray.direction);
-    float b = v1 * inverse_det;
-    float c = v2 * inverse_det;
-    return vec3(1.0 - b - c, b, c);
-}
-
 vec3 camera_ray_direction(vec2 ndc) {
     vec4 view_space_point = constants.inverse_proj * vec4(ndc.x, -ndc.y, 1.0, 1.0);
     return normalize((constants.inverse_view * vec4(view_space_point.xyz, 0.0)).xyz);
-}
-
-vec2 interpolate(vec3 barycentric, f16vec2 a, f16vec2 b, f16vec2 c) {
-    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
-}
-
-vec3 interpolate(vec3 barycentric, vec3 a, vec3 b, vec3 c) {
-    return barycentric.x * a + barycentric.y * b + barycentric.z * c;
 }
 
 RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
@@ -140,33 +112,8 @@ vec3 normal_bias(vec3 position, vec3 normal) {
     return position + normal * 0.00001;
 }
 
-struct DirectLightSample {
-    vec3 barycentric, position, normal;
-    vec2 texcoord;
-    uint instance, hash;
-    float area, light_probability;
-};
-
-DirectLightSample sample_random_light(inout Generator generator) {
-    EmissiveTriangle triangle = scene.emissive_triangles.data[random_uint(generator, scene.emissive_triangle_count)];
-    vec3 barycentric = sample_triangle(generator);
-    mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance].transform);
-    vec3 positions[3] = vec3[3](
-        transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
-        transform * vec4(dequantize_snorm(triangle.positions[1]), 1.0),
-        transform * vec4(dequantize_snorm(triangle.positions[2]), 1.0)
-    );
-    float area = max(0.00001, 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0])));
-    vec3 normal = normalize(cross(positions[1] - positions[0], positions[2] - positions[0]));
-    vec3 position = normal_bias(barycentric[0] * positions[0] + barycentric[1] * positions[1] + barycentric[2] * positions[2], normal);
-    vec2 texcoord = interpolate(barycentric, triangle.texcoords[0], triangle.texcoords[1], triangle.texcoords[2]);
-    return DirectLightSample(
-        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area, 1.0 / scene.emissive_triangle_count
-    );
-}
-
 vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties surface, inout Generator generator) {
-    DirectLightSample light_sample = sample_random_light(generator);
+    DirectLightSample light_sample = sample_random_light(scene, generator);
     vec3 to_light = light_sample.position - position;
     float distance_squared = length_squared(to_light);
     Ray ray = Ray(to_light / sqrt(distance_squared), position);
@@ -198,37 +145,6 @@ vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties sur
     vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
     return brdf * emissive * abs(scatter.normal_dot_scatter) / density;
-}
-
-Reservoir get_reservoir_from_cell(uint cell_index, inout Generator generator) {
-    uint base_index = restir_data.reservoirs_per_cell * cell_index;
-    uint reservoir_index = random_uint(generator, restir_data.reservoirs_per_cell);
-    return restir_data.reservoirs.data[base_index + reservoir_index];
-}
-
-uint64_t get_reservoir_key(vec3 position, vec3 normal) {
-    return hash_grid_key(hash_grid_cell(
-        normal_bias(position, normal), constants.camera_position.xyz,
-        vec3(0.0), 0.0, restir_data.reservoir_hash_grid
-    ));
-}
-
-uint take_reservoir_sample_count(vec3 position, vec3 normal) {
-    uint64_t key = get_reservoir_key(position, normal);
-    uint cell_index;
-    if (hash_grid_insert(restir_data.reservoir_hash_grid, key, cell_index)) {
-        return atomicExchange(restir_data.sample_counts.data[cell_index], 0);
-    } else {
-        return 0;
-    }
-}
-
-void increment_reservoir_sample_count(vec3 position, vec3 normal) {
-    uint64_t key = get_reservoir_key(position, normal);
-    uint cell_index;
-    if (hash_grid_insert(restir_data.reservoir_hash_grid, key, cell_index)) {
-        atomicAdd(restir_data.sample_counts.data[cell_index], 1);
-    }
 }
 
 Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
@@ -367,7 +283,7 @@ bool next_path_segment(inout PathState path_state, inout PathCandidate path_cand
         ));
         uint reservoir_cell_index;
         if (hash_grid_find(restir_data.reservoir_hash_grid, key, reservoir_cell_index)) {
-            Reservoir reservoir = get_reservoir_from_cell(reservoir_cell_index, path_state.generator);
+            Reservoir reservoir = get_reservoir_from_cell(restir_data, reservoir_cell_index, path_state.generator);
             // Reconnect with the sample in the reservoir if it's valid.
             uint bounce_budget = bounce - constants.bounce_count - 1;
             bool can_reconnect = reservoir_is_valid(reservoir)
@@ -489,26 +405,7 @@ void main() {
 
         accumulated += path_state.accumulated;
 
-        if (path_candidate.is_found) {
-            vec3 position = path_vertex_position(path_candidate.origin);
-            vec3 normal = path_vertex_normal(path_candidate.origin);
-            if (length_squared(path_candidate.accumulated) > 0.0) {
-                uint16_t sample_count = uint16_t(take_reservoir_sample_count(position, normal) + 1);
-                Reservoir reservoir = create_reservoir_from_path_candidate(path_candidate, sample_count);
-                // Insert as a reservoir update.
-                uint64_t key = hash_grid_key(hash_grid_cell(
-                    position, constants.camera_position.xyz, vec3(0.0), 0.0, restir_data.update_hash_grid
-                ));
-                uint slot = hash_grid_hash(key) % restir_data.reservoir_hash_grid.capacity;
-                uint update_index = atomicAdd(restir_data.update_counts.data[slot], 1);
-                if (update_index < restir_data.updates_per_cell) {
-                    uint base_index = restir_data.updates_per_cell * slot;
-                    restir_data.updates.data[base_index + update_index] = reservoir;
-                }
-            } else {
-                increment_reservoir_sample_count(position, normal);
-            }
-        }
+        register_path_sample(restir_data, path_candidate, constants.camera_position.xyz);
     }
 
     accumulated /= constants.sample_count;

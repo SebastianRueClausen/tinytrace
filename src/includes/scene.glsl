@@ -1,5 +1,7 @@
 #include "constants"
 #include "octahedron"
+#include "random"
+#include "math"
 
 struct EmissiveTriangle {
     int16_t positions[3][3];
@@ -111,3 +113,28 @@ struct Scene {
     Materials materials;
     uint emissive_triangle_count;
 };
+
+struct DirectLightSample {
+    vec3 barycentric, position, normal;
+    vec2 texcoord;
+    uint instance, hash;
+    float area, light_probability;
+};
+
+DirectLightSample sample_random_light(in Scene scene, inout Generator generator) {
+    EmissiveTriangle triangle = scene.emissive_triangles.data[random_uint(generator, scene.emissive_triangle_count)];
+    vec3 barycentric = sample_triangle(generator);
+    mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance].transform);
+    vec3 positions[3] = vec3[3](
+        transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
+        transform * vec4(dequantize_snorm(triangle.positions[1]), 1.0),
+        transform * vec4(dequantize_snorm(triangle.positions[2]), 1.0)
+    );
+    float area = max(0.00001, 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0])));
+    vec3 normal = normalize(cross(positions[1] - positions[0], positions[2] - positions[0]));
+    vec3 position = interpolate(barycentric, positions[0], positions[1], positions[2]);
+    vec2 texcoord = interpolate(barycentric, triangle.texcoords[0], triangle.texcoords[1], triangle.texcoords[2]);
+    return DirectLightSample(
+        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area, 1.0 / scene.emissive_triangle_count
+    );
+}

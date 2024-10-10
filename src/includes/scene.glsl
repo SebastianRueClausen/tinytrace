@@ -68,9 +68,9 @@ TangentFrame decode_tangent_frame(uint encoded) {
 }
 
 struct Material {
-    uint16_t albedo_texture, normal_texture, specular_texture, emissive_texture;
+    uint16_t albedo_texture, normal_texture, specular_texture, emissive_texture, anisotropy_texture;
     float16_t base_color[4], emissive[3];
-    float16_t metallic, roughness, ior;
+    float16_t metallic, roughness, ior, anisotropy_strength, anisotropy_rotation;
 };
 
 struct BoundingSphere {

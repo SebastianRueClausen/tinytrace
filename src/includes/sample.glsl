@@ -66,9 +66,9 @@ float cosine_hemisphere_density(float normal_dot_scatter) {
 // `view` is the local view direction. Returns the scatter direction in local
 // space. `half_vector` is the sampled normal (or half vector as the
 // microfacet is treated as a perfect mirror).
-vec3 ggx_sample(vec3 view, float roughness, out vec3 half_vector, inout Generator generator) {
+vec3 ggx_sample(vec3 view, vec2 roughness, out vec3 half_vector, inout Generator generator) {
     // Very low roughness values cause issues, so instead, treat it as a delta reflection.
-    if (roughness <= ROUGHNESS_DELTA_CUTOFF) return vec3(-view.xy, view.z);
+    if (all(lessThanEqual(roughness, vec2(ROUGHNESS_DELTA_CUTOFF)))) return vec3(-view.xy, view.z);
     // Stretch hemisphere based on roughness values. This hemisphere is used to
     // sample normals within a visible area.
     vec3 hemisphere = normalize(vec3(roughness * view.xy, view.z));

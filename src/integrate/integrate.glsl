@@ -106,14 +106,13 @@ float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
     ));
 }
 
-vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties surface, inout Generator generator) {
+vec3 direct_light_contribution(vec3 position, Basis surface_basis, SurfaceProperties surface, inout Generator generator) {
     DirectLightSample light_sample = sample_random_light(scene, generator);
     vec3 to_light = light_sample.position - position;
     float distance_squared = length_squared(to_light);
     Ray ray = Ray(to_light / sqrt(distance_squared), position);
     // Transform the area density to the solid angle density.
     float density = (1.0 / light_sample.area) * distance_squared / saturate(dot(-ray.direction, light_sample.normal)) * light_sample.light_probability;
-
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(
         ray_query, acceleration_structure, gl_RayFlagsOpaqueEXT, 0xff, ray.origin, 1.0e-3, ray.direction, 10000.0
@@ -122,23 +121,17 @@ vec3 direct_light_contribution(vec3 position, vec3 normal, SurfaceProperties sur
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         return vec3(0.0);
     }
-
     uint instance_index = rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true);
     if (instance_index != light_sample.instance) return vec3(0.0);
     uint triangle_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true) + scene.instances.instances[instance_index].index_offset / 3;
     if (triangle_index % 0xffff != light_sample.hash) return vec3(0.0);
-
     Material material = scene.materials.materials[scene.instances.instances[light_sample.instance].material];
-
     // TODO: Figure out a good mip level.
     float mip_level = 4.0;
     vec3 emissive = textureLod(textures[material.emissive_texture], light_sample.texcoord, mip_level).rgb
         * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
-
-    ScatterProperties scatter = create_scatter_properties(surface, ray.direction, normal);
-    vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
-
-    return brdf * emissive * abs(scatter.normal_dot_scatter) / density;
+    ScatterProperties scatter = create_scatter_properties(surface, ray.direction, surface_basis.normal);
+    return brdf(surface_basis, surface, scatter) * emissive * abs(scatter.normal_dot_scatter) / density;
 }
 
 Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
@@ -189,12 +182,13 @@ LobeType sample_scatter_direction(
             local_half_vector = normalize(local_scatter + local_view);
             lobe_type = DIFFUSE_LOBE;
         } else {
-            local_scatter = ggx_sample(local_view, surface.roughness, local_half_vector, generator);
+            local_scatter = ggx_sample(local_view, vec2(surface.roughness), local_half_vector, generator);
             lobe_type = SPECULAR_LOBE;
         }
         density = surface.metallic * ggx_density(local_view, local_half_vector, surface.roughness)
             + (1.0 - surface.metallic) * cosine_hemisphere_density(local_scatter.z);
     }
+    density = max(0.001, density);
     return lobe_type;
 }
 
@@ -203,6 +197,9 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
         vec3 sky_color = vec3(0.0);
+        if (path_state.ray.direction.y > 0.0) {
+            sky_color = vec3(5.0);
+        }
         path_state.accumulated += sky_color * path_state.attenuation;
         return false;
     }
@@ -221,13 +218,28 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
 
     vec4 albedo = textureLod(textures[material.albedo_texture], hit.texcoord, path_state.mip_level)
         * vec4(material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3]);
-
     vec2 metallic_roughness = textureLod(textures[material.specular_texture], hit.texcoord, path_state.mip_level).rg;
     vec3 emissive = textureLod(textures[material.emissive_texture], hit.texcoord, path_state.mip_level).rgb
         * vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
 
-    // Determine the surface properties.
     SurfaceProperties surface;
+    surface.anisotropy_direction = vec2(cos(material.anisotropy_rotation), sin(material.anisotropy_rotation));
+    surface.anisotropy_strength = material.anisotropy_strength;
+    if (material.anisotropy_texture != uint16_t(0xffff)) {
+        vec3 anisotropy = textureLod(textures[material.anisotropy_texture], hit.texcoord, path_state.mip_level).rgb;
+        vec2 direction = normalize(anisotropy.rg * 2.0 - 1.0);
+        mat2 direction_transform = mat2(
+            surface.anisotropy_direction.x, surface.anisotropy_direction.y,
+            -surface.anisotropy_direction.y, surface.anisotropy_direction.x
+        );
+        surface.anisotropy_direction = direction_transform * normalize(anisotropy.rg * 2.0 - 1.0);
+        surface.anisotropy_strength = saturate(surface.anisotropy_strength * anisotropy.b);
+        surface.is_anisotropic = true;
+    } else {
+        surface.is_anisotropic = false;
+    }
+
+    // Determine the surface properties.
     surface.albedo = albedo.rgb;
     surface.metallic = metallic_roughness.r * material.metallic;
     surface.roughness = pow2(metallic_roughness.g * material.roughness);
@@ -241,12 +253,13 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
     vec3 local_view = transform_from_basis(surface_basis, surface.view_direction);
 
     bool perform_next_event_estimation = constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION
+        && scene.emissive_triangle_count > 0
         && surface.roughness > 0.15;
 
     // Next event estimation.
     if (perform_next_event_estimation) {
         vec3 direct_light =
-            direct_light_contribution(hit.world_position, surface_basis.normal, surface, path_state.generator);
+            direct_light_contribution(hit.world_position, surface_basis, surface, path_state.generator);
         path_state.accumulated += path_state.attenuation * direct_light;
     }
 
@@ -266,12 +279,11 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
 
     ScatterProperties scatter =
         create_scatter_properties(surface, path_state.ray.direction, surface_basis.normal);
-    vec3 brdf = ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
 
     // FIXME: The minimum here fixes NaNs appearing sometimes, most likely because `scatter_density`
     // is very small (it doesn't ever appear to be 0.0, thus it is likely to be numeric issues and
     // not algebraic).
-    vec3 attenuation_factor = min((brdf * abs(scatter.normal_dot_scatter)) / scatter_density, vec3(1.0));
+    vec3 attenuation_factor = min((brdf(surface_basis, surface, scatter) * abs(scatter.normal_dot_scatter)) / scatter_density, vec3(1.0));
 
     path_state.attenuation *= attenuation_factor;
 

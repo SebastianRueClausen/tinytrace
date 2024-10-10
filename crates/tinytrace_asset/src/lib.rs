@@ -87,6 +87,7 @@ pub enum TextureKind {
     Normal,
     Specular,
     Emissive,
+    Anisotropy,
 }
 
 #[derive(Clone, Debug)]
@@ -104,11 +105,14 @@ pub struct Material {
     pub normal_texture: u16,
     pub specular_texture: u16,
     pub emissive_texture: u16,
+    pub anisotropy_texture: u16,
     pub base_color: [f16; 4],
     pub emissive: [f16; 3],
     pub metallic: f16,
     pub roughness: f16,
     pub ior: f16,
+    pub anisotropy_strength: f16,
+    pub anisotropy_rotation: f16,
 }
 
 unsafe impl bytemuck::NoUninit for Material {}
@@ -142,9 +146,6 @@ fn add_item<T>(vector: &mut Vec<T>, item: T) -> usize {
 
 impl Scene {
     fn add_texture(&mut self, texture: Texture) -> u16 {
-        // For now, every texture kind is block compressed.
-        assert!(texture.width % 4 == 0);
-        assert!(texture.height % 4 == 0);
         add_item(&mut self.textures, texture) as u16
     }
 
@@ -161,4 +162,4 @@ impl Scene {
     }
 }
 
-pub const INVALID_INDEX: u32 = u32::MAX;
+pub const INVALID_INDEX: u16 = u16::MAX;

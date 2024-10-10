@@ -16,6 +16,9 @@ struct SurfaceProperties {
     float fresnel_max;
     vec3 view_direction;
     float normal_dot_view;
+    float anisotropy_strength;
+    vec2 anisotropy_direction;
+    bool is_anisotropic;
 };
 
 struct ScatterProperties {
@@ -77,7 +80,7 @@ float ggx_visibility_unidirectional(float roughness, float cos_theta) {
 float ggx_normal_dist(float roughness, float normal_dot_half) {
     float a = normal_dot_half * roughness;
     float k = roughness / (1.0 - normal_dot_half * normal_dot_half + a * a);
-    return k * k * (1.0 / PI);
+    return k * k * INVERSE_PI;
 }
 
 vec3 ggx_specular(SurfaceProperties surface, ScatterProperties scatter) {
@@ -96,11 +99,69 @@ vec3 burley_diffuse(SurfaceProperties surface, ScatterProperties scatter) {
     vec3 light_scatter = fresnel_schlick(vec3(1.0), surface.fresnel_max, scatter.normal_dot_scatter);
     vec3 view_scatter  = fresnel_schlick(vec3(1.0), surface.fresnel_max, surface.normal_dot_view);
     vec3 diffuse_color = surface.albedo * (1.0 - surface.metallic);
-    return diffuse_color * light_scatter * view_scatter * (1.0 / PI);
+    return diffuse_color * light_scatter * view_scatter * INVERSE_PI;
 }
 
 vec3 fresnel_min(float ior, vec3 albedo, float metallic) {
     return mix(vec3(pow2((ior - 1.0) / (ior + 1.0))), albedo, metallic);
+}
+
+vec3 brdf(SurfaceProperties surface, ScatterProperties scatter) {
+    return ggx_specular(surface, scatter) + burley_diffuse(surface, scatter);
+}
+
+float ggx_normal_dist_anisotropic(
+    float normal_dot_half, float tangent_dot_half, float bitangent_dot_half,
+    float tangent_roughness, float bitangent_roughness
+) {
+    float roughness = tangent_roughness * bitangent_roughness;
+    vec3 f = vec3(bitangent_roughness * tangent_dot_half, tangent_roughness * bitangent_dot_half, roughness * normal_dot_half);
+    return roughness * pow2(roughness / length_squared(f)) * INVERSE_PI;
+}
+
+float ggx_visibility_anisotropic(
+    float normal_dot_scatter, float normal_dot_view, float tangent_dot_view, float bitangent_dot_view,
+    float tangent_dot_scatter, float bitangent_dot_scatter, float tangent_roughness, float bitangent_roughness
+) {
+    float view = normal_dot_scatter * length(
+        vec3(tangent_roughness * tangent_dot_view, bitangent_roughness * bitangent_dot_view, normal_dot_view)
+    );
+    float scatter = normal_dot_view * length(
+        vec3(tangent_roughness * tangent_dot_scatter, bitangent_roughness * bitangent_dot_scatter, normal_dot_scatter)
+    );
+    return saturate(0.5 / (view + scatter));
+}
+
+vec3 ggx_specular_anisotropic(Basis surface_basis, SurfaceProperties surface, ScatterProperties scatter) {
+    vec3 fresnel = fresnel_schlick(surface.fresnel_min, surface.fresnel_max, scatter.view_dot_half);
+    // if (surface.roughness <= ROUGHNESS_DELTA_CUTOFF) return fresnel;
+    vec3 tangent = transform_to_basis(surface_basis, normalize(vec3(surface.anisotropy_direction, 0.0)));
+    vec3 bitangent = normalize(cross(surface_basis.normal, tangent));
+
+    float tangent_roughness = mix(surface.roughness, 1.0, pow2(surface.anisotropy_strength));
+    float bitangent_roughness = clamp(surface.roughness, 0.001, 1.0);
+
+    float normal_dist = ggx_normal_dist_anisotropic(
+        scatter.normal_dot_half, dot(tangent, scatter.half_vector), dot(bitangent, scatter.half_vector),
+        tangent_roughness, bitangent_roughness
+    );
+    float visibility = ggx_visibility_anisotropic(
+        scatter.normal_dot_scatter, surface.normal_dot_view,
+        dot(tangent, surface.view_direction), dot(bitangent, surface.view_direction),
+        dot(tangent, scatter.direction), dot(bitangent, scatter.direction),
+        tangent_roughness, bitangent_roughness
+    );
+    return vec3(normal_dist * visibility * fresnel);
+}
+
+vec3 brdf(Basis surface_basis, SurfaceProperties surface, ScatterProperties scatter) {
+    vec3 specular;
+    if (surface.is_anisotropic) {
+        specular = ggx_specular_anisotropic(surface_basis, surface, scatter);
+    } else {
+        specular = ggx_specular(surface, scatter);
+    }
+    return specular + burley_diffuse(surface, scatter);
 }
 
 #define LobeType uint

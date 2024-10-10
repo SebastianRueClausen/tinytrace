@@ -5,12 +5,13 @@ use std::{array, fs, io, mem};
 use super::normal::TangentFrame;
 use super::{
     normal, BoundingSphere, Error, Instance, Material, Mesh, Model, Scene, Texture, TextureKind,
-    Vertex,
+    Vertex, INVALID_INDEX,
 };
 use bytemuck::AnyBitPattern;
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use gltf::Gltf;
+use gltf::{json, Gltf};
 use half::f16;
+use serde_json::{Map, Value};
 
 #[derive(Default)]
 struct Fallback {
@@ -66,7 +67,7 @@ impl Data {
             gltf::image::Source::View { view, mime_type } => {
                 let format =
                     image::ImageFormat::from_mime_type(mime_type).expect("invalid mime type");
-                let input = self.buffer_data(&view, None, 0);
+                let input: Vec<u8> = self.buffer_data(&view, 1, view.length(), 0).collect();
                 image::load(io::Cursor::new(&input), format)
             }
             gltf::image::Source::Uri { uri, .. } => {
@@ -81,19 +82,59 @@ impl Data {
     fn buffer_data(
         &self,
         view: &gltf::buffer::View,
-        byte_count: Option<usize>,
+        size: usize,
+        count: usize,
         offset: usize,
-    ) -> &[u8] {
-        let start = view.offset() + offset;
-        let end = start + byte_count.unwrap_or(view.length() - offset);
-        &self.buffer_data[view.buffer().index()][start..end]
+    ) -> impl Iterator<Item = u8> + '_ {
+        self.buffer_data[view.buffer().index()][view.offset() + offset..]
+            .chunks(view.stride().unwrap_or(size))
+            .take(count)
+            .flat_map(move |chunk| &chunk[..size])
+            .copied()
     }
 
-    fn accessor_data(&self, accessor: &gltf::Accessor) -> &[u8] {
+    fn accessor_data(&self, accessor: &gltf::Accessor) -> impl Iterator<Item = u8> + '_ {
         let view = accessor.view().unwrap();
-        let bytes = accessor.count() * accessor.size();
-        self.buffer_data(&view, Some(bytes), accessor.offset())
+        self.buffer_data(&view, accessor.size(), accessor.count(), accessor.offset())
     }
+}
+
+fn material_anisotropy(
+    material: &gltf::Material,
+    scene: &mut Scene,
+    data: &Data,
+) -> Result<(u16, f16, f16), Error> {
+    let Some(extension) = get_material_extension(&material, "KHR_materials_anisotropy") else {
+        return Ok((
+            INVALID_INDEX,
+            DEFAULT_ANISOTROPY_STRENGTH,
+            DEFAULT_ANISOTROPY_ROTATION,
+        ));
+    };
+    let texture_index = extension
+        .get("anisotropyTexture")
+        .and_then(|value| serde_json::value::from_value::<json::texture::Info>(value.clone()).ok())
+        .map(|info| {
+            let document = &data.gltf.document;
+            let accessor = document
+                .textures()
+                .nth(info.index.value())
+                .expect("invalid texture index");
+            data.image(accessor.source().source()).map(|image| {
+                scene.add_texture(create_texture(image, TextureKind::Anisotropy, true, |_| ()))
+            })
+        })
+        .transpose()?
+        .unwrap_or(INVALID_INDEX);
+    let get_value = |value| {
+        extension
+            .get(value)
+            .and_then(|value| value.as_number())
+            .and_then(|number| number.as_f64().map(f16::from_f64))
+    };
+    let strength = get_value("anisotropyStrength").unwrap_or(DEFAULT_ANISOTROPY_STRENGTH);
+    let rotation = get_value("anisotropyStrength").unwrap_or(DEFAULT_ANISOTROPY_ROTATION);
+    Ok((texture_index, strength, rotation))
 }
 
 fn load_material(
@@ -102,14 +143,15 @@ fn load_material(
     fallback: &mut Fallback,
     material: gltf::Material,
 ) -> Result<Material, Error> {
-    let mut load = |specs, accessor: Option<gltf::Texture>, transform: fn(&mut [u8])| {
-        Ok::<u16, gltf::Error>(if let Some(accessor) = accessor {
-            let image = data.image(accessor.source().source())?;
-            scene.add_texture(create_texture(image, specs, true, transform))
-        } else {
-            fallback.insert(scene, specs)
-        })
-    };
+    let mut load =
+        |specs: &TextureSpecs, accessor: Option<gltf::Texture>, transform: fn(&mut [u8])| {
+            Ok::<u16, gltf::Error>(if let Some(accessor) = accessor {
+                let image = data.image(accessor.source().source())?;
+                scene.add_texture(create_texture(image, specs.kind, true, transform))
+            } else {
+                fallback.insert(scene, specs)
+            })
+        };
     let accessor = material.pbr_metallic_roughness().base_color_texture();
     let albedo = load(&ALBEDO_SPECS, accessor.map(|i| i.texture()), |_| ())?;
     let accessor = material.emissive_texture();
@@ -133,6 +175,8 @@ fn load_material(
         .pbr_metallic_roughness()
         .base_color_factor()
         .map(f16::from_f32);
+    let (anisotropy_texture, anisotropy_strength, anisotropy_rotation) =
+        material_anisotropy(&material, scene, data)?;
     Ok(Material {
         metallic: f16::from_f32(material.pbr_metallic_roughness().metallic_factor()),
         roughness: f16::from_f32(material.pbr_metallic_roughness().roughness_factor()),
@@ -142,6 +186,9 @@ fn load_material(
         normal_texture: normal,
         specular_texture: specular,
         emissive_texture: emissive,
+        anisotropy_texture,
+        anisotropy_strength,
+        anisotropy_rotation,
         base_color,
     })
 }
@@ -165,7 +212,8 @@ fn load_indices(
     if accessor.dimensions() != Dimensions::Scalar {
         return Err(format_error());
     }
-    let index_data = data.accessor_data(&accessor);
+    let index_data: Vec<u8> = data.accessor_data(&accessor).collect();
+    // TODO: It may be possible to simply cast the vector here. It depends on the alignment guarantees.
     let indices = match accessor.data_type() {
         DataType::U32 => index_data
             .chunks(4)
@@ -197,12 +245,16 @@ fn fallback_material(scene: &mut Scene, fallback: &mut Fallback) -> u32 {
         metallic: DEFAULT_METALLIC,
         roughness: DEFAULT_ROUGHNESS,
         ior: DEFAULT_IOR,
+        anisotropy_texture: INVALID_INDEX,
+        anisotropy_rotation: DEFAULT_ANISOTROPY_ROTATION,
+        anisotropy_strength: DEFAULT_ANISOTROPY_STRENGTH,
     })
 }
 
 fn read_from_accessor<T: AnyBitPattern>(data: &Data, accessor: &gltf::Accessor) -> Vec<T> {
-    data.accessor_data(accessor)
-        .chunks(mem::size_of::<T>())
+    let data: Vec<u8> = data.accessor_data(accessor).collect();
+    // TODO: It may be possible to simply cast the vector here. It depends on the alignment guarantees.
+    data.chunks(mem::size_of::<T>())
         .map(bytemuck::pod_read_unaligned)
         .collect()
 }
@@ -221,7 +273,8 @@ fn load_mesh(
         .unwrap_or_else(|| fallback_material(scene, fallback));
     let accessor = primitive.get(&gltf::Semantic::Positions).unwrap();
     verify_accessor("positions", &accessor, DataType::F32, Dimensions::Vec3)?;
-    let positions = read_from_accessor::<Vec3>(data, &accessor);
+    let positions: Vec<Vec3> = read_from_accessor(data, &accessor);
+
     let indices = load_indices(data, &primitive, positions.len() as u32).unwrap();
     let normals = match primitive.get(&gltf::Semantic::Normals) {
         None => generate_normals(&positions, &indices),
@@ -249,7 +302,7 @@ fn load_mesh(
             read_from_accessor(data, &accessor)
         }
     };
-    let bounding_sphere = bounding_sphere(&primitive);
+    let bounding_sphere = bounding_sphere(&positions);
     let vertices = tex_coords
         .iter()
         .cloned()
@@ -263,16 +316,16 @@ fn load_mesh(
         &mut scene.positions,
         positions.iter().flat_map(|position| {
             let position = (*position - bounding_sphere.center) / bounding_sphere.radius;
-            debug_assert!(position.max_element() <= 1.0);
+            assert!(position.abs().max_element() <= 1.0);
             position
                 .to_array()
                 .map(|value| normal::quantize_snorm(value, 16) as i16)
         }),
     );
     let (vertex_count, index_count) = (vertices.len() as u32, indices.len() as u32);
-    let vertex_offset = extend_vec(&mut scene.vertices, vertices) as u32;
     let index_offset = extend_vec(&mut scene.indices, indices) as u32;
     Ok(Mesh {
+        vertex_offset: extend_vec(&mut scene.vertices, vertices) as u32,
         emissive_triangles: find_emissive_triangles(
             material,
             index_offset,
@@ -280,9 +333,8 @@ fn load_mesh(
             &scene.materials,
         ),
         vertex_count,
-        index_count,
-        vertex_offset,
         index_offset,
+        index_count,
         bounding_sphere,
         material,
     })
@@ -322,14 +374,19 @@ pub fn load_scene(data: &Data) -> Result<Scene, Error> {
     Ok(scene)
 }
 
-fn bounding_sphere(primitive: &gltf::Primitive) -> BoundingSphere {
-    let bounding_box = primitive.bounding_box();
-    let [min, max] = [bounding_box.min, bounding_box.max].map(Vec3::from);
-    let center = min + (max - min) * 0.5;
-    BoundingSphere {
-        radius: (center - max).length(),
-        center,
-    }
+fn bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
+    let center = positions
+        .iter()
+        .enumerate()
+        .fold(Vec3::ZERO, |mean, (index, position)| {
+            mean + (*position - mean) / (index + 1) as f32
+        });
+    let radius = positions
+        .iter()
+        .map(|position| (*position - center).length())
+        .max_by(|a, b| a.total_cmp(&b))
+        .unwrap_or_default();
+    BoundingSphere { center, radius }
 }
 
 fn load_instances<'a>(nodes: impl Iterator<Item = gltf::Node<'a>>) -> Vec<Instance> {
@@ -349,7 +406,7 @@ struct TextureSpecs {
 
 fn create_texture(
     mut image: image::DynamicImage,
-    specs: &TextureSpecs,
+    kind: TextureKind,
     create_mips: bool,
     mut encode: impl FnMut(&mut [u8]) + Copy,
 ) -> Texture {
@@ -361,12 +418,6 @@ fn create_texture(
     } else {
         1
     };
-    let min_width = width >> (mip_level_count - 1);
-    let min_height = height >> (mip_level_count - 1);
-    assert!(
-        min_width >= 4 && min_height >= 4,
-        "smallest mip is too small: {min_width} x {min_height}",
-    );
     let filter = image::imageops::FilterType::Lanczos3;
     let mips = (0..mip_level_count)
         .map(|level| {
@@ -375,12 +426,11 @@ fn create_texture(
             };
             let mut mip = image.clone().into_rgba8();
             mip.pixels_mut().for_each(|pixel| encode(&mut pixel.0));
-            compress_bytes(specs.kind, mip.width(), mip.height(), &mip.into_raw())
-                .into_boxed_slice()
+            compress_bytes(kind, mip.width(), mip.height(), &mip.into_raw()).into_boxed_slice()
         })
         .collect();
     Texture {
-        kind: specs.kind,
+        kind,
         mips,
         width,
         height,
@@ -389,7 +439,9 @@ fn create_texture(
 
 fn compress_bytes(kind: TextureKind, width: u32, height: u32, bytes: &[u8]) -> Vec<u8> {
     let format = match kind {
-        TextureKind::Albedo | TextureKind::Emissive => texpresso::Format::Bc1,
+        TextureKind::Albedo | TextureKind::Emissive | TextureKind::Anisotropy => {
+            texpresso::Format::Bc1
+        }
         TextureKind::Normal | TextureKind::Specular => texpresso::Format::Bc5,
     };
     let params = texpresso::Params {
@@ -510,6 +562,13 @@ fn extend_vec<T>(vec: &mut Vec<T>, items: impl IntoIterator<Item = T>) -> usize 
     index
 }
 
+fn get_material_extension<'a>(
+    material: &'a gltf::Material<'a>,
+    extension_name: &str,
+) -> Option<&'a Map<String, Value>> {
+    material.extensions()?.get(extension_name)?.as_object()
+}
+
 fn find_emissive_triangles(
     material: u32,
     index_offset: u32,
@@ -550,6 +609,8 @@ const EMISSIVE_SPECS: TextureSpecs = TextureSpecs {
 };
 
 const DEFAULT_IOR: f16 = f16::from_f32_const(1.4);
+const DEFAULT_ANISOTROPY_STRENGTH: f16 = f16::ZERO;
+const DEFAULT_ANISOTROPY_ROTATION: f16 = f16::ZERO;
 const DEFAULT_METALLIC: f16 = f16::ZERO;
 const DEFAULT_ROUGHNESS: f16 = f16::ONE;
 

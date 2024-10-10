@@ -215,6 +215,7 @@ fn texture_kind_format(kind: tinytrace_asset::TextureKind) -> ImageFormat {
             ImageFormat::RgBc5Unorm
         }
         tinytrace_asset::TextureKind::Emissive => ImageFormat::RgbBc1Srgb,
+        tinytrace_asset::TextureKind::Anisotropy => ImageFormat::RgbBc1Unorm,
     }
 }
 

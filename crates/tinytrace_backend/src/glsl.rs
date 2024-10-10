@@ -45,7 +45,10 @@ fn binding_format_specifier(ty: &BindingType) -> &'static str {
         match *format {
             ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm | ImageFormat::Bgra8Unorm => ", rgba8",
             ImageFormat::Rgba32Float => ", rgba32f",
-            ImageFormat::RgBc5Unorm | ImageFormat::RgbBc1Srgb | ImageFormat::RgbaBc1Srgb => {
+            ImageFormat::RgBc5Unorm
+            | ImageFormat::RgbBc1Srgb
+            | ImageFormat::RgbaBc1Srgb
+            | ImageFormat::RgbBc1Unorm => {
                 panic!("block compressed formats not usable as storage images")
             }
         }

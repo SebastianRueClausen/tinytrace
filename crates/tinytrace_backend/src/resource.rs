@@ -233,6 +233,7 @@ pub enum ImageFormat {
     RgBc5Unorm = vk::Format::BC5_UNORM_BLOCK.as_raw() as isize,
     RgbBc1Srgb = vk::Format::BC1_RGB_SRGB_BLOCK.as_raw() as isize,
     RgbaBc1Srgb = vk::Format::BC1_RGBA_SRGB_BLOCK.as_raw() as isize,
+    RgbBc1Unorm = vk::Format::BC1_RGB_UNORM_BLOCK.as_raw() as isize,
 }
 
 pub struct FormatInfo {
@@ -263,7 +264,9 @@ impl ImageFormat {
             }
             Self::Rgba32Float => FormatInfo::new(Extent::new(1, 1), 16),
             Self::RgBc5Unorm => FormatInfo::new(Extent::new(4, 4), 16),
-            Self::RgbBc1Srgb | Self::RgbaBc1Srgb => FormatInfo::new(Extent::new(4, 4), 8),
+            Self::RgbBc1Srgb | Self::RgbaBc1Srgb | Self::RgbBc1Unorm => {
+                FormatInfo::new(Extent::new(4, 4), 8)
+            }
         }
     }
 

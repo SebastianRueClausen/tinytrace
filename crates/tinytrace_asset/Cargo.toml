@@ -11,7 +11,11 @@ half = { version = "2.4.1", features = ["bytemuck"] }
 gltf = { version = "1.4.1", features = [
     "KHR_materials_ior",
     "KHR_materials_emissive_strength",
+    "extensions",
+    "extras",
+    "utils",
 ] }
+serde_json = { version = "1.0" }
 image = "0.25.1"
 mikktspace = "0.3.0"
 texpresso = { version = "2.0.1", features = ["rayon"] }

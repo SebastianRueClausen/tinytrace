@@ -8,8 +8,10 @@ use bit_set::BitSet;
 use egui::RichText;
 use glam::{Vec2, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use tinytrace::asset::gltf::GltfImporter;
+use tinytrace::asset::SceneImporter;
 pub use tinytrace::Error;
-use tinytrace::LightSampling;
+use tinytrace::{asset, LightSampling};
 use tinytrace::{Camera, CameraMove};
 use tinytrace::{Renderer, SampleStrategy, Timings};
 use tinytrace_backend::{Context, Extent, Handle, Image};
@@ -27,7 +29,7 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn new(scene: tinytrace_asset::Scene) -> Self {
+    pub fn new(scene: asset::Scene) -> Self {
         Self {
             render_state: None,
             scene_controller: SceneController {
@@ -272,7 +274,7 @@ enum SceneLoad {
     Loaded(PathBuf),
     Error(String),
     Loading {
-        thread: thread::JoinHandle<Result<tinytrace_asset::Scene, tinytrace_asset::Error>>,
+        thread: thread::JoinHandle<Result<asset::Scene, asset::gltf::Error>>,
         path: PathBuf,
     },
 }
@@ -281,7 +283,10 @@ impl SceneLoad {
     fn start_loading(&mut self, path: PathBuf) {
         *self = Self::Loading {
             path: path.clone(),
-            thread: thread::spawn(move || tinytrace_asset::Scene::from_gltf(path)),
+            thread: thread::spawn(move || {
+                let loader = GltfImporter::new(&path)?;
+                loader.new_scene()
+            }),
         };
     }
 
@@ -303,7 +308,7 @@ impl SceneLoad {
         };
     }
 
-    fn update(&mut self) -> Option<tinytrace_asset::Scene> {
+    fn update(&mut self) -> Option<asset::Scene> {
         match mem::take(self) {
             Self::Loading { thread, path } if thread.is_finished() => {
                 match thread.join().unwrap() {
@@ -329,7 +334,7 @@ impl SceneLoad {
 struct SceneController {
     path: String,
     load: SceneLoad,
-    scene: tinytrace_asset::Scene,
+    scene: asset::Scene,
 }
 
 impl SceneController {

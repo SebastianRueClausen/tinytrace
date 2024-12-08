@@ -1,0 +1,5 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+AlignAfterOpenBracket: BlockIndent
+ColumnLimit: 100
+AlignOperands: DontAlign

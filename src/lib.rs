@@ -3,10 +3,13 @@
 #[cfg(test)]
 mod test;
 
+pub mod asset;
 mod camera;
 mod config;
 mod error;
 mod integrate;
+mod material;
+mod math;
 mod post_process;
 mod scene;
 
@@ -38,28 +41,33 @@ pub struct Renderer {
     pub config: Config,
 }
 
+fn add_includes(context: &mut Context) {
+    context.add_include("constants", include_str!("includes/constants.glsl").into());
+    context.add_include(
+        "octahedron",
+        include_str!("includes/octahedron.glsl").into(),
+    );
+    context.add_include("brdf", include_str!("includes/brdf.glsl").into());
+    context.add_include("math", include_str!("includes/math.glsl").into());
+    context.add_include("random", include_str!("includes/random.glsl").into());
+    context.add_include("sample", include_str!("includes/sample.glsl").into());
+    context.add_include("debug", include_str!("includes/debug.glsl").into());
+    context.add_include(
+        "light_sampling",
+        include_str!("includes/light_sampling.glsl").into(),
+    );
+    material::add_includes(context);
+    context.add_include("scene", include_str!("includes/scene.glsl").into());
+}
+
 impl Renderer {
     pub fn new(
         window: Option<(RawWindowHandle, RawDisplayHandle)>,
         extent: Extent,
     ) -> Result<Self, Error> {
-        let scene = tinytrace_asset::Scene::default();
+        let scene = asset::Scene::default();
         let mut context = Context::new(window)?;
-        context.add_include("constants", include_str!("includes/constants.glsl").into());
-        context.add_include(
-            "octahedron",
-            include_str!("includes/octahedron.glsl").into(),
-        );
-        context.add_include("brdf", include_str!("includes/brdf.glsl").into());
-        context.add_include("scene", include_str!("includes/scene.glsl").into());
-        context.add_include("math", include_str!("includes/math.glsl").into());
-        context.add_include("random", include_str!("includes/random.glsl").into());
-        context.add_include("sample", include_str!("includes/sample.glsl").into());
-        context.add_include("debug", include_str!("includes/debug.glsl").into());
-        context.add_include(
-            "light_sampling",
-            include_str!("includes/light_sampling.glsl").into(),
-        );
+        add_includes(&mut context);
 
         let render_target = create_render_target(&mut context, extent)?;
         let constants = context.create_buffer(
@@ -91,7 +99,7 @@ impl Renderer {
         })
     }
 
-    pub fn set_scene(&mut self, scene: &tinytrace_asset::Scene) -> Result<(), Error> {
+    pub fn set_scene(&mut self, scene: &asset::Scene) -> Result<(), Error> {
         self.context
             .clear_resources_with_lifetime(Lifetime::Scene)?;
         self.scene = Scene::new(&mut self.context, scene)?;

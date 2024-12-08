@@ -1,15 +1,14 @@
 use std::borrow::Cow;
-use std::{array, mem};
+use std::mem;
 
 use glam::{Mat4, Quat, Vec3};
 use half::f16;
 
-use crate::Error;
+use crate::{asset, Error};
 use tinytrace_backend::{
     Blas, BlasBuild, BlasRequest, Buffer, BufferRange, BufferRequest, BufferType, BufferWrite,
-    Context, Extent, Filter, Handle, Image, ImageFormat, ImageRequest, ImageWrite, Lifetime,
-    MemoryLocation, Offset, Sampler, SamplerRequest, Tlas, TlasBuildMode, TlasInstance,
-    VertexFormat,
+    Context, Filter, Handle, Image, ImageRequest, ImageWrite, Lifetime, MemoryLocation, Offset,
+    Sampler, SamplerRequest, Tlas, TlasBuildMode, TlasInstance, VertexFormat,
 };
 
 pub struct Scene {
@@ -26,24 +25,35 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new(context: &mut Context, scene: &tinytrace_asset::Scene) -> Result<Self, Error> {
-        let mut scene_instances = Vec::new();
+    pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self, Error> {
+        let (scene_instances, _) = asset::traverse_instance_tree(
+            &scene.root,
+            (Vec::<Instance>::new(), Mat4::IDENTITY),
+            &mut |_, instance, (mut instances, parent_transform)| {
+                let transform = parent_transform * instance.transform;
+                for model in &instance.models {
+                    let mesh = &scene.meshes[model.mesh_index as usize];
+                    let position_transform = transform
+                        * Mat4::from_scale_rotation_translation(
+                            Vec3::splat(mesh.bounding_sphere.radius),
+                            Quat::IDENTITY,
+                            mesh.bounding_sphere.center,
+                        );
+                    instances.push(Instance {
+                        normal_transform: transform.inverse().transpose(),
+                        inverse_transform: position_transform.inverse(),
+                        transform: position_transform,
+                        mesh: model.mesh_index,
+                        material: model.material_index,
+                        index_offset: mesh.index_offset,
+                        vertex_offset: mesh.vertex_offset,
+                    });
+                }
+                (instances, transform)
+            },
+        );
 
-        for instance in &scene.instances {
-            flatten_instance_tree(
-                scene,
-                instance,
-                Mat4::IDENTITY,
-                &scene.meshes,
-                &mut scene_instances,
-            );
-        }
-
-        let emissive_triangle_data: Vec<EmissiveTriangle> = scene_instances
-            .iter()
-            .enumerate()
-            .flat_map(|(index, instance)| instance.emissive_triangles(scene, index as u32))
-            .collect();
+        let emissive_triangle_data = scene.emissive_triangles();
 
         let positions = create_buffer(context, &scene.positions)?;
         let vertices = create_buffer(context, &scene.vertices)?;
@@ -95,7 +105,7 @@ impl Scene {
                 offset: Offset::default(),
                 extent: context.image(image).extent(),
                 image: image.clone(),
-                mips: Cow::Borrowed(&texture.mips),
+                mips: Cow::Borrowed(&texture.data),
             })
             .collect();
         context.write_images(&image_writes).unwrap();
@@ -167,58 +177,6 @@ impl Scene {
     }
 }
 
-fn flatten_instance_tree(
-    scene: &tinytrace_asset::Scene,
-    instance: &tinytrace_asset::Instance,
-    parent_transform: Mat4,
-    meshes: &[tinytrace_asset::Mesh],
-    instances: &mut Vec<Instance>,
-) -> Mat4 {
-    let transform = parent_transform * instance.transform;
-    if let Some(model_index) = instance.model_index {
-        let model = &scene.models[model_index as usize];
-        instances.extend(model.mesh_indices.iter().copied().map(|mesh| {
-            let tinytrace_asset::Mesh {
-                bounding_sphere: tinytrace_asset::BoundingSphere { radius, center },
-                vertex_offset,
-                index_offset,
-                material,
-                ..
-            } = meshes[mesh as usize];
-            let position_transform = transform
-                * Mat4::from_scale_rotation_translation(
-                    Vec3::splat(radius),
-                    Quat::IDENTITY,
-                    center,
-                );
-            Instance {
-                normal_transform: transform.inverse().transpose(),
-                inverse_transform: position_transform.inverse(),
-                transform: position_transform,
-                mesh,
-                material,
-                index_offset,
-                vertex_offset,
-            }
-        }));
-    }
-    for child in &instance.children {
-        flatten_instance_tree(scene, child, transform, meshes, instances);
-    }
-    transform
-}
-
-fn texture_kind_format(kind: tinytrace_asset::TextureKind) -> ImageFormat {
-    match kind {
-        tinytrace_asset::TextureKind::Albedo => ImageFormat::RgbaBc1Srgb,
-        tinytrace_asset::TextureKind::Normal | tinytrace_asset::TextureKind::Specular => {
-            ImageFormat::RgBc5Unorm
-        }
-        tinytrace_asset::TextureKind::Emissive => ImageFormat::RgbBc1Srgb,
-        tinytrace_asset::TextureKind::Anisotropy => ImageFormat::RgbBc1Unorm,
-    }
-}
-
 fn create_buffer<T>(
     context: &mut Context,
     data: &[T],
@@ -245,14 +203,14 @@ fn scene_buffer_write<'a, T: bytemuck::NoUninit>(
 
 fn create_texture(
     context: &mut Context,
-    texture: &tinytrace_asset::Texture,
+    texture: &asset::ProcessedTexture,
 ) -> Result<Handle<Image>, tinytrace_backend::Error> {
     context.create_image(
         Lifetime::Scene,
         &ImageRequest {
-            extent: Extent::new(texture.width, texture.height),
-            format: texture_kind_format(texture.kind),
-            mip_level_count: texture.mips.len() as u32,
+            extent: texture.extent,
+            format: texture.format,
+            mip_level_count: texture.data.len() as u32,
             memory_location: MemoryLocation::Device,
         },
     )
@@ -286,28 +244,6 @@ impl Instance {
             blas: blases[self.mesh as usize].clone(),
             index,
         }
-    }
-
-    fn emissive_triangles<'a>(
-        &'a self,
-        scene: &'a tinytrace_asset::Scene,
-        instance_index: u32,
-    ) -> impl Iterator<Item = EmissiveTriangle> + 'a {
-        let mesh = &scene.meshes[self.mesh as usize];
-        mesh.emissive_triangles.iter().map(move |triangle_index| {
-            let base_index = *triangle_index as usize * 3;
-            let indices: [usize; 3] = array::from_fn(|vertex| {
-                (scene.indices[base_index + vertex] + mesh.vertex_offset) as usize
-            });
-            EmissiveTriangle {
-                tex_coords: indices.map(|index| scene.vertices[index].tex_coord),
-                positions: indices.map(|index| {
-                    array::from_fn(|coordinate| scene.positions[index * 3 + coordinate])
-                }),
-                instance: instance_index,
-                hash: (triangle_index % u16::MAX as u32) as u16,
-            }
-        })
     }
 }
 

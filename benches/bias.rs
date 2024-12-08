@@ -1,6 +1,7 @@
 use core::f32;
 
 use glam::{Vec3, Vec4};
+use tinytrace::asset::{self, SceneImporter};
 use tinytrace_backend::Extent;
 
 #[allow(unused)]
@@ -31,7 +32,6 @@ fn mean_absolute_percentage_error(correct: &[Vec4], prediction: &[Vec4]) -> f32 
 fn benchmark() {
     let bounce_count = 4;
     let ground_truth_config = tinytrace::Config {
-        // Uniform hemisphere is gives very different results, could perhaps be a bug.
         sample_strategy: tinytrace::SampleStrategy::CosineHemisphere,
         light_sampling: tinytrace::LightSampling::OnHit,
         sample_count: 1 << 16,
@@ -51,7 +51,8 @@ fn benchmark() {
     renderer.camera.yaw = 1.57;
     renderer.camera.pitch = 0.0;
     renderer.camera.fov = f32::to_radians(75.0);
-    let scene = tinytrace_asset::Scene::from_gltf("scenes/cornell_box.gltf").unwrap();
+    let importer = asset::gltf::GltfImporter::new("scenes/cornell_box.gltf").unwrap();
+    let scene = importer.new_scene().unwrap();
     renderer.set_scene(&scene).unwrap();
     renderer.set_config(ground_truth_config).unwrap();
     let unbiased_output = renderer.render_to_texture().unwrap();

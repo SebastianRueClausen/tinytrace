@@ -44,6 +44,8 @@ fn binding_format_specifier(ty: &BindingType) -> &'static str {
     if let BindingType::StorageImage { format, .. } = ty {
         match *format {
             ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm | ImageFormat::Bgra8Unorm => ", rgba8",
+            ImageFormat::R8Unorm | ImageFormat::R8Snorm => ", r8",
+            ImageFormat::R16Float => ", r32f",
             ImageFormat::Rgba32Float => ", rgba32f",
             ImageFormat::RgBc5Unorm
             | ImageFormat::RgbBc1Srgb
@@ -52,6 +54,8 @@ fn binding_format_specifier(ty: &BindingType) -> &'static str {
                 panic!("block compressed formats not usable as storage images")
             }
         }
+    } else if let BindingType::StorageBuffer { .. } = ty {
+        ", std430"
     } else {
         ""
     }

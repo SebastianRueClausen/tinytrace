@@ -7,22 +7,35 @@ edition = "2021"
 members = [
     "crates/tinytrace_backend",
     "crates/tinytrace_egui",
-    "crates/tinytrace_asset",
     "crates/tinytrace_viewer",
 ]
 
 [dependencies]
-glam = { version = "0.27.0", features = ["bytemuck"] }
+glam = { version = "0.27.0", features = ["bytemuck", "rand"] }
 thiserror = "1.0.59"
 bytemuck = { version = "1.15.0", features = ["derive", "extern_crate_std"] }
 raw-window-handle = "0.6.1"
 half = { version = "2.4.1", features = ["bytemuck"] }
+texpresso = { version = "2.0.1", features = ["rayon"] }
+mikktspace = "0.3.0"
 tinytrace_backend = { path = "crates/tinytrace_backend" }
-tinytrace_asset = { path = "crates/tinytrace_asset" }
+rand = { version = "0.8.5" }
+gltf = { version = "1.4.1", features = [
+    "KHR_materials_ior",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "extensions",
+    "extras",
+    "utils",
+] }
+png = "0.17.16"
 
 [dev-dependencies]
 winit = { version = "0.30.5", features = ["rwh_06"] }
 tinytrace_viewer = { path = "crates/tinytrace_viewer" }
+bsdf = "0.1.1"
 
 [[example]]
 name = "viewer"

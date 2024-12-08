@@ -1,3 +1,5 @@
+use std::f32::consts::{FRAC_PI_2, TAU};
+
 use glam::{Mat4, Vec3};
 
 #[derive(Debug, Clone, Copy)]
@@ -14,7 +16,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             position: Vec3::ZERO,
-            fov: std::f32::consts::FRAC_PI_2,
+            fov: FRAC_PI_2,
             z_near: 0.1,
             z_far: 400.0,
             yaw: 0.0,
@@ -34,7 +36,7 @@ impl Camera {
     }
 
     pub fn right(&self) -> Vec3 {
-        self.forward().cross(Self::UP).normalize()
+        -self.forward().cross(Self::UP).normalize()
     }
 
     pub fn proj(&self, aspect: f32) -> Mat4 {
@@ -49,7 +51,7 @@ impl Camera {
 
     pub fn move_by(&mut self, delta: CameraMove) {
         self.position += delta.translation;
-        self.yaw = (self.yaw + delta.yaw) % std::f32::consts::TAU;
+        self.yaw = (self.yaw - delta.yaw) % TAU;
         self.pitch = (self.pitch - delta.pitch).clamp(-1.553, 1.553);
     }
 

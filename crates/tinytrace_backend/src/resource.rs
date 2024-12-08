@@ -227,6 +227,9 @@ fn format_features(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageFormat {
     Rgba8Srgb = vk::Format::R8G8B8A8_SRGB.as_raw() as isize,
+    R8Unorm = vk::Format::R8_UNORM.as_raw() as isize,
+    R8Snorm = vk::Format::R8_SNORM.as_raw() as isize,
+    R16Float = vk::Format::R16_SFLOAT.as_raw() as isize,
     Rgba8Unorm = vk::Format::R8G8B8A8_UNORM.as_raw() as isize,
     Bgra8Unorm = vk::Format::B8G8R8A8_UNORM.as_raw() as isize,
     Rgba32Float = vk::Format::R32G32B32A32_SFLOAT.as_raw() as isize,
@@ -262,6 +265,8 @@ impl ImageFormat {
             Self::Rgba8Srgb | Self::Rgba8Unorm | Self::Bgra8Unorm => {
                 FormatInfo::new(Extent::new(1, 1), 4)
             }
+            Self::R8Unorm | Self::R8Snorm => FormatInfo::new(Extent::new(1, 1), 1),
+            Self::R16Float => FormatInfo::new(Extent::new(1, 1), 2),
             Self::Rgba32Float => FormatInfo::new(Extent::new(1, 1), 16),
             Self::RgBc5Unorm => FormatInfo::new(Extent::new(4, 4), 16),
             Self::RgbBc1Srgb | Self::RgbaBc1Srgb | Self::RgbBc1Unorm => {
@@ -692,7 +697,6 @@ impl Context {
         };
         vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-            .flags(vk::GeometryFlagsKHR::OPAQUE)
             .geometry(geometry_data)
     }
 
@@ -899,7 +903,6 @@ impl Context {
             };
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-                .flags(vk::GeometryFlagsKHR::OPAQUE)
                 .geometry(geometry_data);
             let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
                 .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
@@ -1018,14 +1021,12 @@ impl Context {
             .iter()
             .map(|instance| {
                 let transform = instance.transform.transpose().to_cols_array();
-                let flags = vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE
-                    | vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE;
                 let index_bytes = instance.index.to_le_bytes();
                 TlasInstanceData {
                     blas_address: self.blas(&instance.blas).device_address(&self.device),
                     transform: array::from_fn(|index| transform[index]),
                     index: array::from_fn(|index| index_bytes[index]),
-                    flags: flags.as_raw() as u8,
+                    flags: 0,
                     mask: 0xff,
                     ..Default::default()
                 }
@@ -1107,7 +1108,7 @@ fn tlas_geometry_info(
     };
     vk::AccelerationStructureGeometryKHR::default()
         .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-        .flags(vk::GeometryFlagsKHR::OPAQUE)
+        .flags(vk::GeometryFlagsKHR::empty())
         .geometry(geometry_data)
 }
 

@@ -1,9 +1,11 @@
 use std::f32::consts::{PI, TAU};
 
-use glam::{Vec2, Vec2Swizzles, Vec3, Vec3Swizzles, Vec4};
+use glam::{Vec2, Vec3, Vec4};
+
+use crate::math::{decode_octahedron, dequantize_unorm, encode_octahedron, quantize_unorm};
 
 #[repr(C)]
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct TangentFrame {
     /// `0..10` - octahedron mapped normal u-coordinate unorm.
     /// `10..20` - octahedron mapped normal v-coordinate unorm.
@@ -11,8 +13,6 @@ pub struct TangentFrame {
     /// `31` - bitangent sign (negative if 0).
     pub encoded: u32,
 }
-
-unsafe impl bytemuck::NoUninit for TangentFrame {}
 
 impl TangentFrame {
     pub fn new(normal: Vec3, tangent: Vec4) -> Self {
@@ -36,15 +36,6 @@ impl TangentFrame {
     }
 }
 
-fn decode_octahedron(octahedron: Vec2) -> Vec3 {
-    let normal = octahedron * 2.0 - 1.0;
-    let mut normal = normal.xy().extend(1.0 - normal.x.abs() - normal.y.abs());
-    let t = (-normal.z).clamp(0.0, 1.0);
-    normal.x += if normal.x >= 0.0 { -t } else { t };
-    normal.y += if normal.y >= 0.0 { -t } else { t };
-    normal.normalize()
-}
-
 /// Return the angle between `a` and `b` around the `normal` vector.
 /// `a` and `b` should both be orthogonal with `normal`.
 /// The angle will be counter clockwise and between `0.0` and `std::f32::consts::PI`.
@@ -62,41 +53,10 @@ fn angle_around_normal(normal: Vec3, a: Vec3, b: Vec3) -> f32 {
 }
 
 /// Deterministic orthonormal vector to `normal`.
-pub fn orthonormal(normal: Vec3) -> Vec3 {
+fn orthonormal(normal: Vec3) -> Vec3 {
     if normal.x.abs() > normal.z.abs() {
         Vec3::new(-normal.y, normal.x, 0.0).normalize()
     } else {
         Vec3::new(0.0, -normal.z, normal.y).normalize()
     }
-}
-
-pub fn encode_octahedron(mut normal: Vec3) -> Vec2 {
-    fn wrap(value: Vec2) -> Vec2 {
-        (Vec2::ONE - value.yx().abs()) * value.signum()
-    }
-    normal /= normal.x.abs() + normal.y.abs() + normal.z.abs();
-    if normal.z < 0.0 {
-        wrap(normal.xy()) * 0.5 + 0.5
-    } else {
-        normal.xy() * 0.5 + 0.5
-    }
-}
-
-pub fn quantize_unorm(v: f32, n: i32) -> i32 {
-    let scale = ((1i32 << n) - 1i32) as f32;
-    let v = if v >= 0f32 { v } else { 0f32 };
-    let v = if v <= 1f32 { v } else { 1f32 };
-    (v * scale + 0.5f32) as i32
-}
-
-pub fn quantize_snorm(mut v: f32, n: i32) -> i32 {
-    let scale = ((1 << (n - 1)) - 1) as f32;
-    let round = if v >= 0.0 { 0.5 } else { -0.5 };
-    v = if v >= -1.0 { v } else { -1.0 };
-    v = if v <= 1.0 { v } else { 1.0 };
-    (v * scale + round) as i32
-}
-
-pub fn dequantize_unorm(value: u32, n: u32) -> f32 {
-    value as f32 / ((1_i32 << n) - 1) as f32
 }

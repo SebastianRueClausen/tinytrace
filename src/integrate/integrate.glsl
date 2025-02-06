@@ -143,12 +143,28 @@ float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
         );
 }
 
-/*
+bool fetch_texture(uint index, vec2 texture_coordinates, float mip_level, inout vec4 rgba) {
+    bool has_texture = index != INVALID_INDEX;
+    if (has_texture)
+        rgba = textureLod(textures[index], texture_coordinates, mip_level);
+    return has_texture;
+}
+
+vec3 material_emissive(in Material material, vec2 texture_coordinates, float mip_level) {
+    vec4 color = material.constants.emission_color;
+    vec4 luminance = vec4(material.constants.emission_luminance);
+    fetch_texture(material.textures.emission_color, texture_coordinates, mip_level, color);
+    fetch_texture(material.textures.emission_luminance, texture_coordinates, mip_level, luminance);
+    return color.xyz * luminance.x;
+}
+
 vec3 direct_light_contribution(
-    vec3 position, Basis surface_basis, SurfaceProperties surface, inout Generator generator
+    vec3 position, vec3 wi, Basis surface_basis, MaterialConstants surface_material, Lobes lobes,
+    inout Generator generator
 ) {
     DirectLightSample light_sample = sample_random_light(scene, generator);
     vec3 to_light = light_sample.position - position;
+    vec3 wo = transform_from_basis(surface_basis, -to_light);
     float distance_squared = length_squared(to_light);
     Ray ray = Ray(to_light / sqrt(distance_squared), position);
     // Transform the area density to the solid angle density.
@@ -175,16 +191,11 @@ vec3 direct_light_contribution(
     Material material =
         scene.materials.materials[scene.instances.instances[light_sample.instance].material];
     // TODO: Figure out a good mip level.
-    float mip_level = 4.0;
-    vec3 emissive =
-        textureLod(textures[material.emissive_texture], light_sample.texcoord, mip_level).rgb *
-        vec3(material.emissive[0], material.emissive[1], material.emissive[2]);
-    ScatterProperties scatter =
-        create_scatter_properties(surface, ray.direction, surface_basis.normal);
-    return brdf(surface_basis, surface, scatter) * emissive *
-        abs(dot(ray.direction, surface_basis.normal)) / density;
+    vec3 emissive = material_emissive(material, light_sample.texcoord, 4.0);
+    float bsdf_density;
+    vec3 bsdf = bsdf_evaluate(surface_material, lobes, wi, wo, bsdf_density);
+    return bsdf * emissive * abs(cos_theta(wo)) / density;
 }
-*/
 
 Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
     Basis surface_basis;
@@ -196,9 +207,6 @@ Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
 
 struct PathState {
     vec3 accumulated, throughput;
-    // The two generators. `generator` is used to everything that doens't change the path.
-    // `path_generator` generates the path. This is usefull when replaying paths, which only
-    // requires replacing `path_generator`.
     Generator generator;
     // The normalized device coordinates. This is only used to calculate the mip level for the
     // primary hit.
@@ -211,13 +219,6 @@ struct PathState {
 
 PathState create_path_state(Generator generator, vec2 ndc, Ray ray) {
     return PathState(vec3(0.0), vec3(1.0), generator, ndc, 1.0, ray);
-}
-
-bool fetch_texture(uint index, vec2 texture_coordinates, float mip_level, out vec4 rgba) {
-    bool has_texture = index != INVALID_INDEX;
-    if (has_texture)
-        rgba = textureLod(textures[index], texture_coordinates, mip_level);
-    return has_texture;
 }
 
 MaterialConstants load_textures(in Material material, vec2 texture_coordinates, float mip_level) {
@@ -246,7 +247,7 @@ MaterialConstants load_textures(in Material material, vec2 texture_coordinates, 
     return constants;
 }
 
-// Trace the next path segment. Returns true false if the path has left the scene.
+// Trace the next path segment. Returns false if the path has left the scene.
 bool next_path_segment(inout PathState path_state, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
@@ -260,25 +261,41 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
         path_state.mip_level = calculate_mip_level(hit.texcoord_ddx, hit.texcoord_ddy);
     }
 
-    MaterialConstants material =
-        load_textures(scene.materials.materials[hit.material], hit.texcoord, path_state.mip_level);
-    Basis surface_basis = create_surface_basis(hit.tangent_space, material.geometry_normal.xyz);
+    Material material = scene.materials.materials[hit.material];
+    MaterialConstants material_constants =
+        load_textures(material, hit.texcoord, path_state.mip_level);
+    Basis surface_basis =
+        create_surface_basis(hit.tangent_space, material_constants.geometry_normal.xyz);
 
-    vec3 local_view = transform_from_basis(surface_basis, -path_state.ray.direction);
-    Lobes lobes = bsdf_prepare(material, local_view, path_state.generator);
+    vec3 wi = transform_from_basis(surface_basis, -path_state.ray.direction);
+    Lobes lobes = bsdf_prepare(material_constants, wi, path_state.generator);
+
+    bool perform_next_event_estimation =
+        constants.light_sampling == LIGHT_SAMPLING_NEXT_EVENT_ESTIMATION &&
+        scene.emissive_triangle_count > 0 && material_constants.specular_roughness > 0.15;
+
+    if (perform_next_event_estimation) {
+        vec3 direct_light = direct_light_contribution(
+            hit.world_position, wi, surface_basis, material_constants, lobes, path_state.generator
+        );
+        path_state.accumulated += path_state.throughput * direct_light;
+    }
+
+    if (bounce == 0 || !perform_next_event_estimation) {
+        vec3 emissive = material_emissive(material, hit.texcoord, path_state.mip_level);
+        path_state.accumulated += emissive * path_state.throughput;
+    }
 
     float scatter_density = 1.0;
-    vec3 local_scatter;
+    vec3 wo;
     int sampled_lobe_index;
     vec3 bsdf = bsdf_sample(
-        material, lobes, local_view, path_state.generator, local_scatter, scatter_density,
-        sampled_lobe_index
+        material_constants, lobes, wi, path_state.generator, wo, scatter_density, sampled_lobe_index
     );
 
-    path_state.ray.direction = transform_to_basis(surface_basis, local_scatter);
+    path_state.ray.direction = transform_to_basis(surface_basis, wo);
     path_state.ray.origin = hit.world_position;
-    path_state.throughput *=
-        bsdf / max(scatter_density, PDF_EPSILON) * abs(cos_theta(local_scatter));
+    path_state.throughput *= bsdf / max(scatter_density, PDF_EPSILON) * abs(cos_theta(wo));
 
     return true;
 }

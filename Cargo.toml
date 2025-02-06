@@ -39,7 +39,3 @@ bsdf = "0.1.1"
 
 [[example]]
 name = "viewer"
-
-[[bench]]
-name = "bias"
-harness = false

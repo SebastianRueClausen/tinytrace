@@ -16,7 +16,7 @@ mod scene;
 use std::{mem, time::Duration};
 
 pub use camera::{Camera, CameraMove};
-pub use config::{Config, LightSampling, SampleStrategy};
+pub use config::{Config, LightSampling};
 pub use error::Error;
 use glam::{Mat4, UVec2, Vec4};
 use integrate::Integrator;
@@ -47,15 +47,10 @@ fn add_includes(context: &mut Context) {
         "octahedron",
         include_str!("includes/octahedron.glsl").into(),
     );
-    context.add_include("brdf", include_str!("includes/brdf.glsl").into());
     context.add_include("math", include_str!("includes/math.glsl").into());
     context.add_include("random", include_str!("includes/random.glsl").into());
     context.add_include("sample", include_str!("includes/sample.glsl").into());
     context.add_include("debug", include_str!("includes/debug.glsl").into());
-    context.add_include(
-        "light_sampling",
-        include_str!("includes/light_sampling.glsl").into(),
-    );
     material::add_includes(context);
     context.add_include("scene", include_str!("includes/scene.glsl").into());
 }
@@ -140,12 +135,10 @@ impl Renderer {
             inverse_view: view.inverse(),
             inverse_proj: proj.inverse(),
             tonemap: self.config.tonemap.into(),
-            sample_strategy: self.config.sample_strategy,
             light_sampling: self.config.light_sampling,
             proj_view,
             view,
             proj,
-            padding: Default::default(),
         };
 
         self.context.write_buffers(&[BufferWrite {
@@ -253,9 +246,7 @@ struct Constants {
     bounce_count: u32,
     screen_size: UVec2,
     tonemap: u32,
-    sample_strategy: SampleStrategy,
     light_sampling: LightSampling,
-    padding: [u32; 3],
 }
 
 const RENDER_TARGET_FORMAT: ImageFormat = ImageFormat::Rgba32Float;

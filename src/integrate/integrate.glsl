@@ -1,11 +1,9 @@
-#include "brdf"
+#include "bsdf"
 #include "constants"
 #include "debug"
 #include "math"
 #include "sample"
 #include "scene"
-
-#include "bsdf"
 
 #include "<bindings>"
 
@@ -242,8 +240,6 @@ MaterialConstants load_textures(in Material material, vec2 texture_coordinates, 
         constants.transmission_weight = rgba.r;
     if (fetch_texture(material.textures.transmission_color, texture_coordinates, mip_level, rgba))
         constants.transmission_color = rgba;
-    if (fetch_texture(material.textures.emission_color, texture_coordinates, mip_level, rgba))
-        constants.emission_color = rgba;
     return constants;
 }
 

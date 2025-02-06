@@ -13,7 +13,7 @@ use tinytrace::asset::SceneImporter;
 pub use tinytrace::Error;
 use tinytrace::{asset, LightSampling};
 use tinytrace::{Camera, CameraMove};
-use tinytrace::{Renderer, SampleStrategy, Timings};
+use tinytrace::{Renderer, Timings};
 use tinytrace_backend::{Context, Extent, Handle, Image};
 use tinytrace_egui::{RenderRequest as GuiRenderRequest, Renderer as GuiRenderer};
 use winit::application::ApplicationHandler;
@@ -375,20 +375,6 @@ impl RendererController {
             };
             drag_value(&mut self.config.sample_count, "Sample count");
             drag_value(&mut self.config.bounce_count, "Bounce count");
-            egui::ComboBox::from_label("Sample strategy")
-                .selected_text(format!("{}", self.config.sample_strategy))
-                .show_ui(ui, |ui| {
-                    let mut option = |value| {
-                        ui.selectable_value(
-                            &mut self.config.sample_strategy,
-                            value,
-                            format!("{value}"),
-                        );
-                    };
-                    option(SampleStrategy::UniformHemisphere);
-                    option(SampleStrategy::CosineHemisphere);
-                    option(SampleStrategy::Brdf);
-                });
             ui.end_row();
             egui::ComboBox::from_label("Light sampling")
                 .selected_text(format!("{}", self.config.light_sampling))

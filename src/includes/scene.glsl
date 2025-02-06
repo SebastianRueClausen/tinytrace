@@ -1,8 +1,12 @@
+#ifndef SCENE
+#define SCENE
+
 #include "constants"
 #include "material"
 #include "math"
 #include "octahedron"
 #include "random"
+#include "sample"
 
 struct EmissiveTriangle {
     int16_t positions[3][3];
@@ -110,7 +114,7 @@ struct DirectLightSample {
 DirectLightSample sample_random_light(in Scene scene, inout Generator generator) {
     EmissiveTriangle triangle =
         scene.emissive_triangles.data[random_uint(generator, scene.emissive_triangle_count)];
-    vec3 barycentric = sample_triangle(generator);
+    vec3 barycentric = sample_triangle(random_vec2(generator));
     mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance].transform);
     vec3 positions[3] = vec3[3](
         transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
@@ -129,3 +133,5 @@ DirectLightSample sample_random_light(in Scene scene, inout Generator generator)
         1.0 / scene.emissive_triangle_count
     );
 }
+
+#endif

@@ -79,8 +79,6 @@ pub struct Transmission {
     pub weight: Param<f32>,
     pub color: Param<Vec3>,
     pub depth: Param<f32>,
-    pub scatter: Param<Vec3>,
-    pub scatter_anisotropy: Param<f32>,
 }
 
 impl Default for Transmission {
@@ -89,8 +87,6 @@ impl Default for Transmission {
             weight: 0.0.into(),
             color: Vec3::ONE.into(),
             depth: 0.0.into(),
-            scatter: Vec3::ZERO.into(),
-            scatter_anisotropy: 0.0.into(),
         }
     }
 }
@@ -156,7 +152,6 @@ impl Default for Emission {
 pub struct Geometry {
     pub opacity: Param<f32>,
     pub normal: Param<Vec3>,
-    pub coat_normal: Param<Vec3>,
 }
 
 impl Default for Geometry {
@@ -164,7 +159,6 @@ impl Default for Geometry {
         Self {
             opacity: 1.0.into(),
             normal: Vec3::Z.into(),
-            coat_normal: Vec3::Z.into(),
         }
     }
 }
@@ -210,12 +204,10 @@ define_material_structs! {
     base_color: Vec4,
     specular_color: Vec4,
     transmission_color: Vec4,
-    transmission_scatter: Vec4,
     coat_color: Vec4,
     fuzz_color: Vec4,
     emission_color: Vec4,
     geometry_normal: Vec4,
-    geometry_coat_normal: Vec4,
     base_weight: f32,
     base_metalness: f32,
     base_diffuse_roughness: f32,
@@ -226,7 +218,6 @@ define_material_structs! {
     specular_rotation: f32,
     transmission_weight: f32,
     transmission_depth: f32,
-    transmission_scatter_anisotropy: f32,
     coat_weight: f32,
     coat_roughness: f32,
     coat_roughness_anisotropy: f32,
@@ -237,7 +228,6 @@ define_material_structs! {
     fuzz_roughness: f32,
     emission_luminance: f32,
     geometry_opacity: f32,
-    padding: [u32; 3],
 }
 
 impl Material {
@@ -247,12 +237,10 @@ impl Material {
             base_color: vec3(&self.base.color),
             specular_color: vec3(&self.specular.color),
             transmission_color: vec3(&self.transmission.color),
-            transmission_scatter: vec3(&self.transmission.scatter),
             coat_color: vec3(&self.coat.color),
             fuzz_color: vec3(&self.fuzz.color),
             emission_color: vec3(&self.emission.color),
             geometry_normal: vec3(&self.geometry.normal),
-            geometry_coat_normal: vec3(&self.geometry.coat_normal),
             base_weight: self.base.weight.constant_or_default(),
             base_metalness: self.base.metalness.constant_or_default(),
             base_diffuse_roughness: self.base.diffuse_roughness.constant_or_default(),
@@ -262,10 +250,6 @@ impl Material {
             specular_ior: self.specular.ior.constant_or_default(),
             transmission_weight: self.transmission.weight.constant_or_default(),
             transmission_depth: self.transmission.depth.constant_or_default(),
-            transmission_scatter_anisotropy: self
-                .transmission
-                .scatter_anisotropy
-                .constant_or_default(),
             coat_weight: self.coat.weight.constant_or_default(),
             coat_roughness: self.coat.roughness.constant_or_default(),
             coat_roughness_anisotropy: self.coat.roughness_anisotropy.constant_or_default(),
@@ -277,7 +261,6 @@ impl Material {
             geometry_opacity: self.geometry.opacity.constant_or_default(),
             specular_rotation: self.specular.rotation.constant_or_default().into(),
             coat_rotation: self.coat.rotation.constant_or_default().into(),
-            padding: [0; 3],
         }
     }
 }
@@ -287,7 +270,7 @@ impl Material {
 pub(crate) struct ProcessedMaterial {
     pub constants: MaterialConstants,
     pub textures: MaterialTextures,
-    pub padding: [u32; 1],
+    pub padding: u32,
 }
 
 impl Scene {
@@ -315,10 +298,6 @@ impl Scene {
         self.process_and_insert_texture(texture, ProcessedTexture::from_scalar_unorm_texture)
     }
 
-    fn insert_scalar_snorm_texture(&mut self, texture: Option<&Texture<f32>>) -> u32 {
-        self.process_and_insert_texture(texture, ProcessedTexture::from_scalar_snorm_texture)
-    }
-
     fn insert_scalar_float_texture(&mut self, texture: Option<&Texture<f32>>) -> u32 {
         self.process_and_insert_texture(texture, ProcessedTexture::from_scalar_float_texture)
     }
@@ -336,11 +315,7 @@ impl Scene {
             coat_color: self.insert_color_texture(material.coat.color.texture()),
             fuzz_color: self.insert_color_texture(material.fuzz.color.texture()),
             emission_color: self.insert_color_texture(material.emission.color.texture()),
-            transmission_scatter: self
-                .insert_color_texture(material.transmission.scatter.texture()),
             geometry_normal: self.insert_normal_texture(material.geometry.normal.texture()),
-            geometry_coat_normal: self
-                .insert_normal_texture(material.geometry.coat_normal.texture()),
             base_weight: self.insert_scalar_unorm_texture(material.base.weight.texture()),
             base_metalness: self.insert_scalar_unorm_texture(material.base.metalness.texture()),
             base_diffuse_roughness: self
@@ -366,19 +341,16 @@ impl Scene {
             specular_ior: self.insert_scalar_float_texture(material.specular.ior.texture()),
             transmission_depth: self
                 .insert_scalar_float_texture(material.transmission.depth.texture()),
-            transmission_scatter_anisotropy: self
-                .insert_scalar_snorm_texture(material.transmission.scatter_anisotropy.texture()),
             // FIXME: This should not be float textures.
             specular_rotation: self
                 .insert_scalar_float_texture(material.specular.rotation.texture()),
             coat_rotation: self.insert_scalar_float_texture(material.coat.rotation.texture()),
-            padding: 0,
         };
 
         self.materials.push(ProcessedMaterial {
             constants: material.constants(),
             textures,
-            padding: [0; 1],
+            padding: 0,
         });
 
         index

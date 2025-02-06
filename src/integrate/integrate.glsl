@@ -224,22 +224,48 @@ MaterialConstants load_textures(in Material material, vec2 texture_coordinates, 
     vec4 rgba;
     if (fetch_texture(material.textures.base_color, texture_coordinates, mip_level, rgba))
         constants.base_color = rgba;
+    if (fetch_texture(material.textures.specular_color, texture_coordinates, mip_level, rgba))
+        constants.specular_color = rgba;
+    if (fetch_texture(material.textures.transmission_color, texture_coordinates, mip_level, rgba))
+        constants.transmission_color = rgba;
+    if (fetch_texture(material.textures.coat_color, texture_coordinates, mip_level, rgba))
+        constants.coat_color = rgba;
+    if (fetch_texture(material.textures.fuzz_color, texture_coordinates, mip_level, rgba))
+        constants.fuzz_color = rgba;
     if (fetch_texture(material.textures.geometry_normal, texture_coordinates, mip_level, rgba))
         constants.geometry_normal = octahedron_decode(rgba.rg).xyzx;
     if (fetch_texture(material.textures.base_metalness, texture_coordinates, mip_level, rgba))
         constants.base_metalness = rgba.r;
-    if (fetch_texture(material.textures.specular_roughness, texture_coordinates, mip_level, rgba))
-        constants.specular_roughness = rgba.r;
+    if (fetch_texture(
+            material.textures.base_diffuse_roughness, texture_coordinates, mip_level, rgba
+        ))
+        constants.base_diffuse_roughness = rgba.r;
     if (fetch_texture(material.textures.specular_weight, texture_coordinates, mip_level, rgba))
         constants.specular_weight = rgba.r;
-    if (fetch_texture(material.textures.specular_color, texture_coordinates, mip_level, rgba))
-        constants.specular_color = rgba;
+    if (fetch_texture(material.textures.specular_roughness, texture_coordinates, mip_level, rgba))
+        constants.specular_roughness = rgba.r;
+    if (fetch_texture(
+            material.textures.specular_roughness_anisotropy, texture_coordinates, mip_level, rgba
+        ))
+        constants.specular_roughness_anisotropy = rgba.r;
     if (fetch_texture(material.textures.specular_ior, texture_coordinates, mip_level, rgba))
         constants.specular_ior = rgba.r;
+    if (fetch_texture(material.textures.specular_rotation, texture_coordinates, mip_level, rgba))
+        constants.specular_rotation = rgba.r;
     if (fetch_texture(material.textures.transmission_weight, texture_coordinates, mip_level, rgba))
         constants.transmission_weight = rgba.r;
-    if (fetch_texture(material.textures.transmission_color, texture_coordinates, mip_level, rgba))
-        constants.transmission_color = rgba;
+    if (fetch_texture(material.textures.coat_weight, texture_coordinates, mip_level, rgba))
+        constants.coat_weight = rgba.r;
+    if (fetch_texture(material.textures.coat_darkening, texture_coordinates, mip_level, rgba))
+        constants.coat_darkening = rgba.r;
+    if (fetch_texture(material.textures.coat_rotation, texture_coordinates, mip_level, rgba))
+        constants.coat_rotation = rgba.r;
+    if (fetch_texture(material.textures.fuzz_weight, texture_coordinates, mip_level, rgba))
+        constants.fuzz_weight = rgba.r;
+    if (fetch_texture(material.textures.fuzz_roughness, texture_coordinates, mip_level, rgba))
+        constants.fuzz_roughness = rgba.r;
+    if (fetch_texture(material.textures.geometry_opacity, texture_coordinates, mip_level, rgba))
+        constants.geometry_opacity = rgba.r;
     return constants;
 }
 

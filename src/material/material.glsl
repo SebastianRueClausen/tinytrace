@@ -11,12 +11,10 @@ struct MaterialConstants {
     vec4 base_color;
     vec4 specular_color;
     vec4 transmission_color;
-    vec4 transmission_scatter;
     vec4 coat_color;
     vec4 fuzz_color;
     vec4 emission_color;
     vec4 geometry_normal;
-    vec4 geometry_coat_normal;
     float base_weight;
     float base_metalness;
     float base_diffuse_roughness;
@@ -27,7 +25,6 @@ struct MaterialConstants {
     float specular_rotation;
     float transmission_weight;
     float transmission_depth;
-    float transmission_scatter_anisotropy;
     float coat_weight;
     float coat_roughness;
     float coat_roughness_anisotropy;
@@ -44,12 +41,10 @@ struct MaterialTextures {
     uint base_color;
     uint specular_color;
     uint transmission_color;
-    uint transmission_scatter;
     uint coat_color;
     uint fuzz_color;
     uint emission_color;
     uint geometry_normal;
-    uint geometry_coat_normal;
     uint base_weight;
     uint base_metalness;
     uint base_diffuse_roughness;
@@ -60,7 +55,6 @@ struct MaterialTextures {
     uint specular_rotation;
     uint transmission_weight;
     uint transmission_depth;
-    uint transmission_scatter_anisotropy;
     uint coat_weight;
     uint coat_roughness;
     uint coat_roughness_anisotropy;

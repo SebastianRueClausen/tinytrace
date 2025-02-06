@@ -40,7 +40,7 @@ vec3 specular_btdf_evaluate(MaterialConstants material, vec3 wi, vec3 wo, inout 
     LocalRotation rotation = local_frame_rotation(2.0 * PI * material.specular_rotation);
     vec3 wi_rotated = rotate_local(wi, rotation), wo_rotated = rotate_local(wo, rotation);
     vec3 microfacet_normal = -wo_rotated - ior * wi_rotated;
-    if (dot(microfacet_normal, microfacet_normal) == 0.0)
+    if (length_squared(microfacet_normal) == 0.0)
         return vec3(0.0);
     microfacet_normal = safe_normalize(microfacet_normal);
     if (cos_theta(microfacet_normal) <= 0.0)

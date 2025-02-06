@@ -83,15 +83,6 @@ impl ProcessedTexture {
         Self::new(data, ImageFormat::R8Unorm, texture.extent)
     }
 
-    pub fn from_scalar_snorm_texture(texture: &Texture<f32>) -> Self {
-        let data = Self::process_texture(texture, |Texture { data, .. }| {
-            data.iter()
-                .map(|value| math::quantize_snorm(*value, 8) as u8)
-                .collect()
-        });
-        Self::new(data, ImageFormat::R8Snorm, texture.extent)
-    }
-
     pub fn from_color_texture(texture: &Texture<Vec3>) -> Self {
         let data = Self::process_texture(texture, |Texture { data, extent }| {
             let rgba: Vec<u8> = data

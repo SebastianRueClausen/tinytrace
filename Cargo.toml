@@ -20,7 +20,7 @@ texpresso = { version = "2.0.1", features = ["rayon"] }
 mikktspace = "0.3.0"
 tinytrace_backend = { path = "crates/tinytrace_backend" }
 rand = { version = "0.8.5" }
-gltf = { version = "1.4.1", features = [
+gltf = { version = "1.4.1", default-features = false, features = [
     "KHR_materials_ior",
     "KHR_materials_emissive_strength",
     "KHR_materials_specular",
@@ -35,7 +35,6 @@ png = "0.17.16"
 [dev-dependencies]
 winit = { version = "0.30.5", features = ["rwh_06"] }
 tinytrace_viewer = { path = "crates/tinytrace_viewer" }
-bsdf = "0.1.1"
 
 [[example]]
 name = "viewer"

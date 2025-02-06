@@ -53,7 +53,7 @@ impl GltfImporter {
         let buffer_data: Vec<_> = gltf
             .buffers()
             .map(|buffer| match buffer.source() {
-                gltf::buffer::Source::Bin => gltf.blob.clone().ok_or(gltf::Error::MissingBlob),
+                gltf::buffer::Source::Bin => todo!("binary GLTF not supported yet"),
                 gltf::buffer::Source::Uri(uri) => {
                     let binary_path: PathBuf =
                         [parent_path.as_path(), Path::new(uri)].iter().collect();

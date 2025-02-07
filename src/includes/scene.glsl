@@ -11,12 +11,12 @@
 struct EmissiveTriangle {
     int16_t positions[3][3];
     uint16_t hash;
-    f16vec2 texcoords[3];
-    uint instance;
+    f16vec2 texture_coordinates[3];
+    uint instance_index;
 };
 
 struct Vertex {
-    f16vec2 texcoord;
+    f16vec2 texture_coordinates;
     uint tangent_frame;
 };
 
@@ -70,7 +70,7 @@ struct BoundingSphere {
 
 struct Instance {
     mat4 transform, inverse_transform, normal_transform;
-    uint vertex_offset, index_offset, material, padding;
+    uint vertex_offset, index_offset, material_index, mesh_index;
 };
 
 const uint INVALID_INDEX = 4294967295;
@@ -106,7 +106,7 @@ struct Scene {
 
 struct DirectLightSample {
     vec3 barycentric, position, normal;
-    vec2 texcoord;
+    vec2 texture_coordinates;
     uint instance, hash;
     float area, light_probability;
 };
@@ -115,7 +115,7 @@ DirectLightSample sample_random_light(in Scene scene, inout Generator generator)
     EmissiveTriangle triangle =
         scene.emissive_triangles.data[random_uint(generator, scene.emissive_triangle_count)];
     vec3 barycentric = sample_triangle(random_vec2(generator));
-    mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance].transform);
+    mat4x3 transform = mat4x3(scene.instances.instances[triangle.instance_index].transform);
     vec3 positions[3] = vec3[3](
         transform * vec4(dequantize_snorm(triangle.positions[0]), 1.0),
         transform * vec4(dequantize_snorm(triangle.positions[1]), 1.0),
@@ -125,12 +125,13 @@ DirectLightSample sample_random_light(in Scene scene, inout Generator generator)
         max(0.00001, 0.5 * length(cross(positions[1] - positions[0], positions[2] - positions[0])));
     vec3 normal = normalize(cross(positions[1] - positions[0], positions[2] - positions[0]));
     vec3 position = interpolate(barycentric, positions[0], positions[1], positions[2]);
-    vec2 texcoord = interpolate(
-        barycentric, triangle.texcoords[0], triangle.texcoords[1], triangle.texcoords[2]
+    vec2 texture_coordinates = interpolate(
+        barycentric, triangle.texture_coordinates[0], triangle.texture_coordinates[1],
+        triangle.texture_coordinates[2]
     );
     return DirectLightSample(
-        barycentric, position, normal, texcoord, triangle.instance, uint(triangle.hash), area,
-        1.0 / scene.emissive_triangle_count
+        barycentric, position, normal, texture_coordinates, triangle.instance_index,
+        uint(triangle.hash), area, 1.0 / scene.emissive_triangle_count
     );
 }
 

@@ -33,10 +33,10 @@ pub struct Model {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Instance {
+pub struct Node {
     pub transform: Mat4,
     pub models: Vec<Model>,
-    pub children: Vec<Instance>,
+    pub children: Vec<Node>,
 }
 
 #[repr(C)]
@@ -82,7 +82,7 @@ pub struct Scene {
     pub(crate) materials: Vec<ProcessedMaterial>,
     pub(crate) meshes: Vec<ProcessedMesh>,
     pub(crate) emissive_materials: HashSet<u32>,
-    pub root: Instance,
+    pub root: Node,
 }
 
 impl Scene {
@@ -160,45 +160,36 @@ impl Scene {
         mesh_index
     }
 
-    fn emissive_triangles_in_model(
+    pub(crate) fn emissive_triangles_in_model(
         &self,
         model: &Model,
         instance_index: u32,
-        emissive_triangles: &mut Vec<EmissiveTriangle>,
-    ) {
+    ) -> Option<impl Iterator<Item = EmissiveTriangle> + '_> {
         if !self.emissive_materials.contains(&model.material_index) {
-            return;
+            return None;
         }
         let mesh = &self.meshes[model.mesh_index as usize];
         let index_range =
             mesh.index_offset as usize..(mesh.index_offset + mesh.index_count) as usize;
-        emissive_triangles.extend(self.indices[index_range].chunks(3).enumerate().map(
-            |(offset, triangle)| {
-                let indices: [u32; 3] = triangle.try_into().unwrap();
-                let positions =
-                    indices.map(|index| self.positions[(mesh.vertex_offset + index) as usize]);
-                let texture_coordinates = indices.map(|index| {
-                    self.vertices[(mesh.vertex_offset + index) as usize].texture_coordinates
-                });
-                EmissiveTriangle {
-                    hash: (mesh.index_offset / 3 + offset as u32 % u16::MAX as u32) as u16,
-                    instance_index,
-                    texture_coordinates,
-                    positions,
-                }
-            },
-        ));
-    }
-
-    pub(crate) fn emissive_triangles(&self) -> Vec<EmissiveTriangle> {
-        let mut find_emissive_triangles =
-            |index, instance: &Instance, mut state: Vec<EmissiveTriangle>| {
-                for model in &instance.models {
-                    self.emissive_triangles_in_model(model, index, &mut state);
-                }
-                state
-            };
-        traverse_instance_tree(&self.root, Vec::new(), &mut find_emissive_triangles)
+        Some(
+            self.indices[index_range]
+                .chunks(3)
+                .enumerate()
+                .map(move |(offset, triangle)| {
+                    let indices: [u32; 3] = triangle.try_into().unwrap();
+                    let positions =
+                        indices.map(|index| self.positions[(mesh.vertex_offset + index) as usize]);
+                    let texture_coordinates = indices.map(|index| {
+                        self.vertices[(mesh.vertex_offset + index) as usize].texture_coordinates
+                    });
+                    EmissiveTriangle {
+                        hash: (mesh.index_offset / 3 + offset as u32 % u16::MAX as u32) as u16,
+                        instance_index,
+                        texture_coordinates,
+                        positions,
+                    }
+                }),
+        )
     }
 }
 
@@ -213,28 +204,23 @@ pub trait SceneImporter {
     }
 }
 
-pub(crate) fn traverse_instance_tree<T, F>(instance: &Instance, default: T, visitor: &mut F) -> T
+pub(crate) fn depth_first_node_tree<T, F>(node: &Node, default: T, visitor: &mut F)
 where
-    F: FnMut(u32, &Instance, T) -> T,
+    F: FnMut(u32, &Node, T) -> T,
+    T: Clone,
 {
-    fn traverse_instance_tree_inner<T, F>(
-        instance: &Instance,
-        index: u32,
-        value: T,
-        visitor: &mut F,
-    ) -> (u32, T)
+    fn inner<T, F>(node: &Node, mut index: u32, value: T, visitor: &mut F) -> u32
     where
-        F: FnMut(u32, &Instance, T) -> T,
+        F: FnMut(u32, &Node, T) -> T,
+        T: Clone,
     {
-        let value = visitor(index, instance, value);
-        instance
-            .children
-            .iter()
-            .fold((index + 1, value), |(index, value), instance| {
-                traverse_instance_tree_inner(instance, index, value, visitor)
-            })
+        let value = visitor(index, node, value);
+        for child in &node.children {
+            index = inner(child, index + 1, value.clone(), visitor);
+        }
+        index
     }
-    traverse_instance_tree_inner(instance, 0, default, visitor).1
+    inner(node, 0, default, visitor);
 }
 
 pub fn generate_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {

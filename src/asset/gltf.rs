@@ -1,5 +1,6 @@
 use std::{
     array,
+    collections::HashMap,
     ffi::OsStr,
     fs, io, mem,
     path::{Path, PathBuf},
@@ -16,7 +17,7 @@ use crate::{
     math,
 };
 
-use super::{Instance, Material, Model, ProcessedTexture, Scene, SceneImporter, Texture};
+use super::{Material, Model, Node, ProcessedTexture, Scene, SceneImporter, Texture};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -191,11 +192,23 @@ fn load_texture_coordinates(
     }
 }
 
+#[derive(Default)]
+struct Cached {
+    materials: HashMap<usize, u32>,
+    // The mesh and primitive index.
+    meshes: HashMap<(usize, usize), u32>,
+}
+
 fn load_mesh(
     data: &GltfImporter,
+    cached: &mut Cached,
     scene: &mut Scene,
+    mesh: &gltf::Mesh,
     primitive: &gltf::Primitive,
 ) -> Result<u32, Error> {
+    if let Some(index) = cached.meshes.get(&(mesh.index(), primitive.index())) {
+        return Ok(*index);
+    }
     let positions = load_positions(data, primitive)?;
     let texture_coordinates = load_texture_coordinates(data, primitive, positions.len())?;
     let indices = load_indices(data, &primitive).transpose()?;
@@ -213,20 +226,31 @@ fn load_mesh(
                 .map(|_| data.read_from_accessor(&accessor))
         })
         .transpose()?;
-    Ok(scene.insert_mesh(&Mesh {
+    let index = scene.insert_mesh(&Mesh {
         positions: &positions,
         texture_coordinates: &texture_coordinates,
         indices: indices.as_deref(),
         normals: normals.as_deref(),
         tangents: tangents.as_deref(),
-    }))
+    });
+    cached
+        .meshes
+        .insert((mesh.index(), primitive.index()), index);
+    Ok(index)
 }
 
 fn load_material(
     data: &GltfImporter,
+    cached: &mut Cached,
     scene: &mut Scene,
     gltf: gltf::Material,
 ) -> Result<u32, Error> {
+    // A bit hacky, but let's just say that the default material has index `usize::MAX`.
+    let material_index = gltf.index().unwrap_or(usize::MAX);
+    if let Some(index) = cached.materials.get(&material_index) {
+        return Ok(*index);
+    }
+
     let mut material = Material::default();
 
     // Base color.
@@ -350,39 +374,44 @@ fn load_material(
         };
     }
 
-    Ok(scene.insert_material(&material))
+    let index = scene.insert_material(&material);
+    cached.materials.insert(material_index, index);
+
+    Ok(index)
 }
 
 fn load_models(
     data: &GltfImporter,
+    cached: &mut Cached,
     scene: &mut Scene,
     mesh: gltf::Mesh,
 ) -> Result<Vec<Model>, Error> {
     mesh.primitives()
         .map(|primitive| {
             Ok(Model {
-                mesh_index: load_mesh(data, scene, &primitive)?,
-                material_index: load_material(data, scene, primitive.material())?,
+                mesh_index: load_mesh(data, cached, scene, &mesh, &primitive)?,
+                material_index: load_material(data, cached, scene, primitive.material())?,
             })
         })
         .collect()
 }
 
-fn load_instances<'a>(
+fn load_nodes<'a>(
     nodes: impl Iterator<Item = gltf::Node<'a>>,
     data: &GltfImporter,
+    cached: &mut Cached,
     scene: &mut Scene,
-) -> Result<Vec<Instance>, Error> {
+) -> Result<Vec<Node>, Error> {
     nodes
         .map(|node| {
-            Ok(Instance {
+            Ok(Node {
                 models: node
                     .mesh()
-                    .map(|mesh| load_models(data, scene, mesh))
+                    .map(|mesh| load_models(data, cached, scene, mesh))
                     .transpose()?
                     .unwrap_or_default(),
                 transform: Mat4::from_cols_array_2d(&node.transform().matrix()),
-                children: load_instances(node.children(), data, scene)?,
+                children: load_nodes(node.children(), data, cached, scene)?,
             })
         })
         .collect()
@@ -392,13 +421,24 @@ impl SceneImporter for GltfImporter {
     type Error = Error;
 
     fn insert_in_scene(&self, scene: &mut Scene) -> Result<(), Self::Error> {
-        let mut instances = load_instances(self.gltf.nodes(), &self, scene)?;
-        scene.textures.push(ProcessedTexture {
-            data: Box::new([vec![0x0; 32 * 32].into_boxed_slice()]),
-            extent: Extent::new(32, 32),
-            format: ImageFormat::R8Unorm,
-        });
-        scene.root.children.append(&mut instances);
+        let mut cached = Cached::default();
+        let Some(gltf_scene) = self
+            .gltf
+            .default_scene()
+            .or_else(|| self.gltf.scenes().next())
+        else {
+            return Ok(());
+        };
+        let mut nodes = load_nodes(gltf_scene.nodes(), &self, &mut cached, scene)?;
+        // TODO: Clean this up.
+        if scene.textures.is_empty() {
+            scene.textures.push(ProcessedTexture {
+                data: Box::new([vec![0x0; 32 * 32].into_boxed_slice()]),
+                extent: Extent::new(32, 32),
+                format: ImageFormat::R8Unorm,
+            });
+        }
+        scene.root.children.append(&mut nodes);
         Ok(())
     }
 }

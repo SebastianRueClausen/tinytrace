@@ -10,8 +10,8 @@
 struct RayHit {
     vec3 world_position;
     Basis tangent_space;
-    vec2 texcoord, texcoord_ddx, texcoord_ddy;
-    uint instance, material;
+    vec2 texture_coordinate, texture_coordinate_ddx, texture_coordinate_ddy;
+    uint instance_index, material_index;
 };
 
 vec3 camera_ray_direction(vec2 ndc) {
@@ -22,9 +22,9 @@ vec3 camera_ray_direction(vec2 ndc) {
 RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
     RayHit hit;
 
-    hit.instance = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
-    Instance instance = scene.instances.instances[hit.instance];
-    hit.material = instance.material;
+    hit.instance_index = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+    Instance instance = scene.instances.instances[hit.instance_index];
+    hit.material_index = instance.material_index;
     mat4x3 transform = mat4x3(instance.transform);
 
     vec3 positions[3];
@@ -72,18 +72,16 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         )
     );
     float bitangent_sign = sign(
-        dot(barycentric,
-            vec3(
-                tangent_frames[0].bitangent_sign, tangent_frames[1].bitangent_sign,
-                tangent_frames[2].bitangent_sign
-            ))
+        tangent_frames[0].bitangent_sign * barycentric.x +
+        tangent_frames[1].bitangent_sign * barycentric.y +
+        tangent_frames[2].bitangent_sign * barycentric.z
     );
     hit.tangent_space.bitangent =
         normalize(bitangent_sign * cross(hit.tangent_space.normal, hit.tangent_space.tangent));
 
-    hit.texcoord = interpolate(
-        barycentric, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord,
-        triangle_vertices[2].texcoord
+    hit.texture_coordinate = interpolate(
+        barycentric, triangle_vertices[0].texture_coordinates,
+        triangle_vertices[1].texture_coordinates, triangle_vertices[2].texture_coordinates
     );
     hit.world_position =
         barycentric.x * positions[0] + barycentric.y * positions[1] + barycentric.z * positions[2];
@@ -98,13 +96,13 @@ RayHit get_ray_hit(rayQueryEXT query, uint bounce, vec2 ndc) {
         vec3 hx = triangle_intersection(positions, ray);
         ray.direction = camera_ray_direction(vec2(ndc.x, ndc.y + texel_size.y));
         vec3 hy = triangle_intersection(positions, ray);
-        hit.texcoord_ddx = interpolate(
-            barycentric - hx, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord,
-            triangle_vertices[2].texcoord
+        hit.texture_coordinate_ddx = interpolate(
+            barycentric - hx, triangle_vertices[0].texture_coordinates,
+            triangle_vertices[1].texture_coordinates, triangle_vertices[2].texture_coordinates
         );
-        hit.texcoord_ddy = interpolate(
-            barycentric - hy, triangle_vertices[0].texcoord, triangle_vertices[1].texcoord,
-            triangle_vertices[2].texcoord
+        hit.texture_coordinate_ddy = interpolate(
+            barycentric - hy, triangle_vertices[0].texture_coordinates,
+            triangle_vertices[1].texture_coordinates, triangle_vertices[2].texture_coordinates
         );
     }
 
@@ -133,12 +131,11 @@ vec2 pixel_ndc(uvec2 pixel_index, inout Generator generator) {
     return ((vec2(pixel_index) + offset) / vec2(constants.screen_size)) * 2.0 - 1.0;
 }
 
-float calculate_mip_level(vec2 texcoord_ddx, vec2 texcoord_ddy) {
-    return 0.5 *
-        log2(
-               max(length_squared(texcoord_ddx * constants.screen_size),
-                   length_squared(texcoord_ddy * constants.screen_size))
-        );
+float calculate_mip_level(vec2 texture_coordinate_ddx, vec2 texture_coordinate_ddy) {
+    float max_gradient_length =
+        max(length_squared(texture_coordinate_ddx * constants.screen_size),
+            length_squared(texture_coordinate_ddy * constants.screen_size));
+    return 0.5 * log2(max_gradient_length);
 }
 
 bool fetch_texture(uint index, vec2 texture_coordinates, float mip_level, inout vec4 rgba) {
@@ -149,8 +146,8 @@ bool fetch_texture(uint index, vec2 texture_coordinates, float mip_level, inout 
 }
 
 vec3 material_emissive(in Material material, vec2 texture_coordinates, float mip_level) {
-    vec4 color = material.constants.emission_color;
-    vec4 luminance = vec4(material.constants.emission_luminance);
+    vec4 color = material.constants.emission_color,
+         luminance = vec4(material.constants.emission_luminance);
     fetch_texture(material.textures.emission_color, texture_coordinates, mip_level, color);
     fetch_texture(material.textures.emission_luminance, texture_coordinates, mip_level, luminance);
     return color.xyz * luminance.x;
@@ -162,7 +159,7 @@ vec3 direct_light_contribution(
 ) {
     DirectLightSample light_sample = sample_random_light(scene, generator);
     vec3 to_light = light_sample.position - position;
-    vec3 wo = transform_from_basis(surface_basis, -to_light);
+    vec3 wo = transform_from_basis(surface_basis, to_light);
     float distance_squared = length_squared(to_light);
     Ray ray = Ray(to_light / sqrt(distance_squared), position);
     // Transform the area density to the solid angle density.
@@ -187,12 +184,12 @@ vec3 direct_light_contribution(
     if (triangle_index % 0xffff != light_sample.hash)
         return vec3(0.0);
     Material material =
-        scene.materials.materials[scene.instances.instances[light_sample.instance].material];
+        scene.materials.materials[scene.instances.instances[light_sample.instance].material_index];
     // TODO: Figure out a good mip level.
-    vec3 emissive = material_emissive(material, light_sample.texcoord, 4.0);
+    vec3 emissive = material_emissive(material, light_sample.texture_coordinates, 4.0);
     float bsdf_density;
     vec3 bsdf = bsdf_evaluate(surface_material, lobes, wi, wo, bsdf_density);
-    return bsdf * emissive * abs(cos_theta(wo)) / density;
+    return bsdf * emissive * abs(cos_theta(wo)) / max(density, PDF_EPSILON);
 }
 
 Basis create_surface_basis(Basis tangent_space, vec3 tangent_space_normal) {
@@ -273,19 +270,20 @@ MaterialConstants load_textures(in Material material, vec2 texture_coordinates, 
 bool next_path_segment(inout PathState path_state, uint bounce) {
     RayHit hit;
     if (!trace_ray(path_state.ray, bounce, path_state.ndc, hit)) {
-        vec3 sky_color = vec3(4.0);
+        vec3 sky_color = vec3(1.0);
         path_state.accumulated += sky_color * path_state.throughput;
         return false;
     }
 
     // Calculate mip level for the first bounce using ray differentials.
     if (bounce == 0) {
-        path_state.mip_level = calculate_mip_level(hit.texcoord_ddx, hit.texcoord_ddy);
+        path_state.mip_level =
+            calculate_mip_level(hit.texture_coordinate_ddx, hit.texture_coordinate_ddy);
     }
 
-    Material material = scene.materials.materials[hit.material];
+    Material material = scene.materials.materials[hit.material_index];
     MaterialConstants material_constants =
-        load_textures(material, hit.texcoord, path_state.mip_level);
+        load_textures(material, hit.texture_coordinate, path_state.mip_level);
     Basis surface_basis =
         create_surface_basis(hit.tangent_space, material_constants.geometry_normal.xyz);
 
@@ -304,7 +302,7 @@ bool next_path_segment(inout PathState path_state, uint bounce) {
     }
 
     if (bounce == 0 || !perform_next_event_estimation) {
-        vec3 emissive = material_emissive(material, hit.texcoord, path_state.mip_level);
+        vec3 emissive = material_emissive(material, hit.texture_coordinate, path_state.mip_level);
         path_state.accumulated += emissive * path_state.throughput;
     }
 

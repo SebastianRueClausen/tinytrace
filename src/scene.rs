@@ -26,12 +26,15 @@ pub struct Scene {
 
 impl Scene {
     pub fn new(context: &mut Context, scene: &asset::Scene) -> Result<Self, Error> {
-        let (scene_instances, _) = asset::traverse_instance_tree(
+        let mut scene_instances = Vec::new();
+        let mut emissive_triangle_data = Vec::new();
+
+        asset::depth_first_node_tree(
             &scene.root,
-            (Vec::<Instance>::new(), Mat4::IDENTITY),
-            &mut |_, instance, (mut instances, parent_transform)| {
-                let transform = parent_transform * instance.transform;
-                for model in &instance.models {
+            Mat4::IDENTITY,
+            &mut |_, node, parent_transform| {
+                let transform = parent_transform * node.transform;
+                for model in &node.models {
                     let mesh = &scene.meshes[model.mesh_index as usize];
                     let position_transform = transform
                         * Mat4::from_scale_rotation_translation(
@@ -39,21 +42,26 @@ impl Scene {
                             Quat::IDENTITY,
                             mesh.bounding_sphere.center,
                         );
-                    instances.push(Instance {
+                    let instance_index = scene_instances.len() as u32;
+                    scene_instances.push(Instance {
                         normal_transform: transform.inverse().transpose(),
                         inverse_transform: position_transform.inverse(),
                         transform: position_transform,
-                        mesh: model.mesh_index,
-                        material: model.material_index,
+                        mesh_index: model.mesh_index,
+                        material_index: model.material_index,
                         index_offset: mesh.index_offset,
                         vertex_offset: mesh.vertex_offset,
                     });
+                    emissive_triangle_data.extend(
+                        scene
+                            .emissive_triangles_in_model(model, instance_index)
+                            .into_iter()
+                            .flatten(),
+                    );
                 }
-                (instances, transform)
+                transform
             },
         );
-
-        let emissive_triangle_data = scene.emissive_triangles();
 
         let positions = create_buffer(context, &scene.positions)?;
         let vertices = create_buffer(context, &scene.vertices)?;
@@ -233,15 +241,15 @@ struct Instance {
     normal_transform: Mat4,
     vertex_offset: u32,
     index_offset: u32,
-    material: u32,
-    mesh: u32,
+    material_index: u32,
+    mesh_index: u32,
 }
 
 impl Instance {
     fn tlas_instance(&self, blases: &[Handle<Blas>], index: u32) -> TlasInstance {
         TlasInstance {
             transform: self.transform,
-            blas: blases[self.mesh as usize].clone(),
+            blas: blases[self.mesh_index as usize].clone(),
             index,
         }
     }

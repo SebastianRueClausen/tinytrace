@@ -175,7 +175,7 @@ pub struct Material {
 }
 
 impl Material {
-    fn is_emissive(&self) -> bool {
+    pub(crate) fn is_emissive(&self) -> bool {
         match &self.emission.luminance {
             Param::Constant(value) => *value > 0.0,
             Param::Texture(texture) => texture.data.iter().any(|value| *value > 0.0),
